@@ -6,19 +6,22 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.ViewModelProvider
+import com.trackgas.app.tracking.TrackerScreen
+import com.trackgas.app.tracking.TrackerViewModel
 
+/**
+ * Android entry point that configures edge-to-edge system bars and hosts the Compose UI.
+ *
+ * [TrackerViewModel] is scoped to this activity's ViewModel store, so readings survive
+ * configuration changes without being serialized into saved state or written to disk.
+ */
 class MainActivity : ComponentActivity() {
+    private val tracker by lazy { ViewModelProvider(this)[TrackerViewModel::class.java] }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -26,24 +29,23 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         setContent {
-            TrackGasApp()
+            TrackGasApp(tracker)
         }
     }
 }
 
+/** Applies the dark theme and binds the activity-owned state holder to the state/callback UI. */
 @Composable
-private fun TrackGasApp() {
+private fun TrackGasApp(tracker: TrackerViewModel) {
     MaterialTheme(colorScheme = darkColorScheme()) {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier.fillMaxSize().safeDrawingPadding(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.headlineLarge,
-                )
-            }
-        }
+        TrackerScreen(
+            state = tracker.state,
+            currentDate = tracker::today,
+            onSelectTab = tracker::selectTab,
+            onSelectPeriod = tracker::selectPeriod,
+            onNavigate = tracker::navigate,
+            onSave = tracker::save,
+            onDelete = tracker::delete,
+        )
     }
 }
