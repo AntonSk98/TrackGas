@@ -49,4 +49,30 @@ class ReadingValidationTest {
             assertEquals(value, validate(text, locale = locale).candidate?.cubicMetres)
         }
     }
+
+    @Test fun liveDateValidationMatchesSaveWithoutRequiringAMeterValue() {
+        for (date in listOf(null, today.plusDays(1), today.minusDays(1), today.minusDays(2))) {
+            assertEquals(
+                validate("", date).errors.date,
+                validateReadingDate(readings, null, date, today),
+            )
+        }
+        assertEquals(ReadingError.DUPLICATE_DATE, validateReadingDate(readings, null, readings[1].date, today))
+        assertNull(validateReadingDate(readings, null, today, today))
+    }
+
+    @Test fun liveDateValidationExcludesOnlyTheReadingBeingEdited() {
+        assertNull(validateReadingDate(readings, "b", readings[1].date, today))
+        assertEquals(ReadingError.DUPLICATE_DATE, validateReadingDate(readings, "b", readings[0].date, today))
+        assertNull(validateReadingDate(readings, "b", today, today))
+        assertEquals(ReadingError.DATE_REQUIRED, validateReadingDate(readings, "b", null, today))
+        assertEquals(ReadingError.FUTURE_DATE, validateReadingDate(readings, "b", today.plusDays(1), today))
+    }
+
+    @Test fun liveDateFeedbackTracksChangesToTheAuthoritativeReadings() {
+        val date = readings[1].date
+        assertNull(validateReadingDate(emptyList(), null, date, today))
+        assertEquals(ReadingError.DUPLICATE_DATE, validateReadingDate(readings, null, date, today))
+        assertNull(validateReadingDate(readings.filterNot { it.date == date }, null, date, today))
+    }
 }

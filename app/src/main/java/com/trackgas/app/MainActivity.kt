@@ -6,12 +6,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.ViewModelProvider
 import com.trackgas.app.tracking.TrackerScreen
 import com.trackgas.app.tracking.TrackerViewModel
+import com.trackgas.app.ui.theme.TrackGasTheme
 
 /**
  * Android entry point that configures edge-to-edge system bars and hosts the Compose UI.
@@ -25,8 +24,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         setContent {
             TrackGasApp(tracker)
@@ -34,10 +33,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Applies the dark theme and binds the activity-owned state holder to the state/callback UI. */
+/** Applies the app theme and binds the activity-owned state holder to the state/callback UI. */
 @Composable
 private fun TrackGasApp(tracker: TrackerViewModel) {
-    MaterialTheme(colorScheme = darkColorScheme()) {
+    TrackGasTheme {
         TrackerScreen(
             state = tracker.state,
             currentDate = tracker::today,

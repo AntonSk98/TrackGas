@@ -80,6 +80,16 @@ class TrackerViewModelTest {
         assertNull(vm.state.dashboard.total.cubicMetres)
     }
 
+    @Test fun duplicateDatesAreRejectedWithoutPublishingADifferentSnapshot() {
+        val vm = tracker()
+        save(vm, "2026-10-26", "100")
+        val before = vm.state
+        val errors = vm.save(null, LocalDate.parse("2026-10-26"), "101", Locale.US)
+        assertEquals(ReadingError.DUPLICATE_DATE, errors.date)
+        assertSame(before, vm.state)
+        assertEquals(1, vm.state.readings.size)
+    }
+
     @Test fun freshViewModelStartsEmptyOnCurrentWeek() {
         val old = tracker()
         save(old, "2026-10-01", "100")
@@ -149,6 +159,26 @@ class TrackerViewModelTest {
             assertSame(beforeInvalidSave, vm.state)
         } finally {
             TimeZone.setDefault(original)
+        }
+    }
+
+    @Test fun repeatedTabSelectionsNeverResetDataPeriodOrProjection() {
+        val vm = tracker()
+        vm.selectPeriod(PeriodType.MONTH)
+        vm.navigate(-1)
+        save(vm, "2026-09-01", "100")
+        save(vm, "2026-09-04", "112")
+        val period = vm.state.period
+        val readings = vm.state.readings
+        val projection = vm.state.dashboard
+        repeat(10) {
+            listOf(TrackerTab.HISTORY, TrackerTab.HISTORY, TrackerTab.DASHBOARD).forEach { tab ->
+                vm.selectTab(tab)
+                assertEquals(tab, vm.state.tab)
+                assertEquals(period, vm.state.period)
+                assertEquals(readings, vm.state.readings)
+                assertSame(projection, vm.state.dashboard)
+            }
         }
     }
 

@@ -19,6 +19,15 @@ data class ReadingErrors(
 /** A candidate is supplied only when all field and chronological checks pass. */
 data class ReadingValidation(val candidate: Reading?, val errors: ReadingErrors)
 
+/** Shared by live date selection and final save; an edit cannot conflict with itself. */
+fun validateReadingDate(readings: List<Reading>, id: String?, date: LocalDate?, today: LocalDate): ReadingError? =
+    when {
+        date == null -> ReadingError.DATE_REQUIRED
+        date > today -> ReadingError.FUTURE_DATE
+        readings.any { it.id != id && it.date == date } -> ReadingError.DUPLICATE_DATE
+        else -> null
+    }
+
 /**
  * Validates an Add/Edit draft without modifying [readings].
  *
@@ -42,12 +51,7 @@ fun validateReading(
     locale: Locale,
 ): ReadingValidation {
     val others = readings.filterNot { it.id == id }
-    val dateError = when {
-        date == null -> ReadingError.DATE_REQUIRED
-        date > today -> ReadingError.FUTURE_DATE
-        others.any { it.date == date } -> ReadingError.DUPLICATE_DATE
-        else -> null
-    }
+    val dateError = validateReadingDate(readings, id, date, today)
     val text = input.trim()
     val separator = DecimalFormatSymbols.getInstance(locale).decimalSeparator
     val normalized = text.map { character ->

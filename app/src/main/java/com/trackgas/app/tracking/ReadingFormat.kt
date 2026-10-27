@@ -8,9 +8,22 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
 
-/** Shared locale-aware date label for dashboard rows, history, and the reading form. */
+/** Full date context for history and the reading form. */
 internal fun dateText(date: LocalDate, locale: Locale): String =
     date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale))
+
+internal fun bucketText(
+    date: LocalDate,
+    type: PeriodType,
+    locale: Locale,
+    padDay: Boolean = false,
+): String = when (type) {
+    PeriodType.WEEK -> date.format(DateTimeFormatter.ofPattern("EEE", locale))
+    PeriodType.MONTH -> NumberFormat.getIntegerInstance(locale).apply {
+        minimumIntegerDigits = if (padDay) 2 else 1
+    }.format(date.dayOfMonth)
+    PeriodType.YEAR -> date.format(DateTimeFormatter.ofPattern("LLL", locale))
+}
 
 /**
  * Formats decimals without grouping so raw meter values can be reused in the editor.

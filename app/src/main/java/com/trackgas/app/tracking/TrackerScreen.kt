@@ -1,6 +1,7 @@
 package com.trackgas.app.tracking
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
@@ -8,9 +9,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -18,22 +23,33 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.trackgas.app.R
 import java.time.LocalDate
 import java.util.Locale
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 
 /** Captures the Add/Edit target and its opening date independently of subsequent recompositions. */
 private data class FormTarget(val reading: Reading?, val initialDate: LocalDate)
@@ -64,24 +80,67 @@ fun TrackerScreen(
     var deleteError by remember { mutableStateOf(false) }
     val dashboardScroll = rememberLazyListState()
     val historyScroll = rememberLazyListState()
+    val pager = rememberPagerState(initialPage = state.tab.ordinal) { TrackerTab.entries.size }
+    val scope = rememberCoroutineScope()
+    var tabAnimation by remember { mutableStateOf<Job?>(null) }
+    var navigationReady by remember { mutableStateOf(false) }
+    val selectTab by rememberUpdatedState(onSelectTab)
+    // The ViewModel, not restored pager saved state, defines the selection after process death.
+    LaunchedEffect(pager) {
+        pager.scrollToPage(state.tab.ordinal)
+        navigationReady = true
+        snapshotFlow { pager.settledPage }
+            .distinctUntilChanged()
+            .collect { selectTab(TrackerTab.entries[it]) }
+    }
     Scaffold(
         modifier = Modifier.imePadding(),
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text(stringResource(R.string.app_name)) },
+                    title = {
+                        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge)
+                    },
+                    expandedHeight = 56.dp,
                     actions = {
                         IconButton(onClick = { form = FormTarget(null, currentDate()) }) {
                             Icon(painterResource(R.drawable.ic_add), stringResource(R.string.add_reading))
                         }
                     },
                 )
-                PrimaryTabRow(selectedTabIndex = state.tab.ordinal) {
+                val selectedPage = if (navigationReady) pager.targetPage else state.tab.ordinal
+                PrimaryTabRow(
+                    selectedTabIndex = selectedPage,
+                    containerColor = MaterialTheme.colorScheme.background,
+                    indicator = {
+                        TabRowDefaults.PrimaryIndicator(
+                            width = Dp.Unspecified,
+                            modifier = Modifier.tabIndicatorLayout { measurable, constraints, positions ->
+                                val tab = positions[pager.currentPage]
+                                val width = 40.dp.roundToPx().coerceAtMost(constraints.maxWidth)
+                                val indicator = measurable.measure(
+                                    constraints.copy(minWidth = width, maxWidth = width),
+                                )
+                                // Follow the finger directly; the default offset adds another animation.
+                                val offset = (tab.left.toPx() +
+                                    tab.width.toPx() * pager.currentPageOffsetFraction +
+                                    (tab.width.toPx() - width) / 2).roundToInt()
+                                layout(constraints.maxWidth, indicator.height) {
+                                    indicator.placeRelative(offset, 0)
+                                }
+                            },
+                        )
+                    },
+                ) {
                     TrackerTab.entries.forEach { tab ->
                         Tab(
-                            selected = state.tab == tab,
-                            onClick = { onSelectTab(tab) },
+                            selected = selectedPage == tab.ordinal,
+                            enabled = navigationReady,
+                            onClick = {
+                                tabAnimation?.cancel()
+                                tabAnimation = scope.launch { pager.animateScrollToPage(tab.ordinal) }
+                            },
                             text = {
                                 Text(stringResource(if (tab == TrackerTab.DASHBOARD) R.string.dashboard_tab else R.string.history_tab))
                             },
@@ -91,30 +150,38 @@ fun TrackerScreen(
             }
         },
     ) { padding ->
-        LazyColumn(
+        HorizontalPager(
+            state = pager,
             modifier = Modifier.fillMaxSize().padding(padding),
-            state = if (state.tab == TrackerTab.DASHBOARD) dashboardScroll else historyScroll,
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item(key = "temporary-notice") {
-                Text(stringResource(R.string.temporary_notice), style = MaterialTheme.typography.bodyMedium)
-            }
-            if (state.tab == TrackerTab.DASHBOARD) {
-                dashboardItems(state.period, state.dashboard, locale, onSelectPeriod, onNavigate)
-            } else {
-                historyItems(
-                    state.readings,
-                    locale,
-                    onEdit = { form = FormTarget(it, it.date) },
-                    onDelete = { deleting = it; deleteError = false },
-                )
+            key = { TrackerTab.entries[it] },
+            userScrollEnabled = navigationReady,
+        ) { page ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                LazyColumn(
+                    modifier = Modifier.widthIn(max = 840.dp).fillMaxSize(),
+                    state = if (page == TrackerTab.DASHBOARD.ordinal) dashboardScroll else historyScroll,
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    if (page == TrackerTab.DASHBOARD.ordinal) {
+                        dashboardItems(state.period, state.dashboard, locale, onSelectPeriod, onNavigate)
+                    } else {
+                        item(key = "temporary-notice") { TemporaryNotice() }
+                        historyItems(
+                            state.readings,
+                            locale,
+                            onEdit = { form = FormTarget(it, it.date) },
+                            onDelete = { deleting = it; deleteError = false },
+                        )
+                    }
+                }
             }
         }
     }
     form?.let { target ->
         ReadingForm(
             reading = target.reading,
+            readings = state.readings,
             initialDate = target.initialDate,
             today = currentDate(),
             locale = locale,
@@ -137,9 +204,12 @@ fun TrackerScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    if (onDelete(reading.id)) deleting = null else deleteError = true
-                }) { Text(stringResource(R.string.delete)) }
+                TextButton(
+                    onClick = {
+                        if (onDelete(reading.id)) deleting = null else deleteError = true
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text(stringResource(R.string.delete)) }
             },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.cancel)) } },
         )
