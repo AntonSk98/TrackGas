@@ -3,6 +3,8 @@ package com.trackgas.app
 import com.trackgas.app.tracking.PeriodType
 import com.trackgas.app.tracking.bucketText
 import com.trackgas.app.tracking.dateText
+import com.trackgas.app.tracking.numberText
+import java.math.BigDecimal
 import java.time.LocalDate
 import java.util.Locale
 import org.junit.Assert.assertEquals
@@ -11,6 +13,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReadingFormatTest {
+    @Test fun rawValuesKeepTrailingZerosForEditing() {
+        assertEquals("100.0100", numberText(BigDecimal("100.0100"), Locale.US, raw = true))
+        assertEquals("100,0100", numberText(BigDecimal("100.0100"), Locale.GERMANY, raw = true))
+        assertEquals("100.01", numberText(BigDecimal("100.0100"), Locale.US))
+    }
+
     @Test fun weeksUseLocalizedWeekdaysEvenAcrossYears() {
         val monday = LocalDate.parse("2026-12-28")
         val sunday = LocalDate.parse("2027-01-03")

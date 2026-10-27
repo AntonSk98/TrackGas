@@ -31,7 +31,7 @@ page. Weekly/Monthly/Yearly scrolls with the Dashboard heading and consumption,
 rather than staying pinned beneath the navigation tabs. History has no period
 controls. The tab indicator follows the swipe continuously, and tab taps highlight
 their destination immediately rather than waiting for the page to settle.
-Both pages display a compact temporary-reading notice near the top.
+Both pages display a compact local-storage notice near the top.
 
 Chart ticks and consumption rows use weekday names in Weekly, day numbers in
 Monthly, and month names in Yearly. The period heading provides the year once
@@ -62,13 +62,16 @@ Weekly/Monthly/Yearly stays above the consumption card. Previous/next arrows and
 the centred date range sit directly below the chart inside that card, before the
 numeric list. Empty periods keep the same navigation below their message.
 
-## Temporary readings
+## Local readings
 
-This is one local, **in-memory-only** tracker. Readings, selected tab, and period
-survive recomposition and screen rotation through an activity-scoped ViewModel.
-They are not written to saved state, a file, preferences, or a database. Ending
-the app process loses all readings; a fresh process opens empty on Dashboard for
-the current Monday-to-Sunday week. This is not durable meter-record storage.
+Readings are stored in an app-private database on the device and survive app
+process termination and restart. There is no account, server, or cloud backup;
+uninstalling the app or clearing its data removes the readings. Android backup
+is disabled, but this is not a guarantee against device-vendor transfers or
+access on a compromised device. The selected tab and period survive rotation,
+but a fresh process opens Dashboard for the current Monday-to-Sunday week.
+Loading and storage errors are shown with retry; failed saves retain their draft
+and failed deletions retain their confirmation. Drafts are not durable records.
 
 ## How consumption is calculated
 
@@ -123,7 +126,7 @@ Your installable debug APK is:
 3. Install it, then open **TrackGas**.
 
 Requires Android 8.0 or newer. The app runs offline. No USB debugging, account,
-or server is needed. There is no database, price, or weather integration.
+or server is needed. There is no price or weather integration.
 
 ## Development checks
 
@@ -139,7 +142,8 @@ $env:JAVA_OPTS = $env:JAVA_OPTS -replace '%JAVA_OPTS%', ''
 
 ## Code structure
 
-`TrackerViewModel` owns the in-memory snapshot and validates mutations.
+`TrackerViewModel` is retained in an application-managed store for each activity; it
+publishes the committed snapshot and coordinates mutations through the local reading repository.
 `TrackerScreen` coordinates the Foundation pager, tabs, and shared dialogs using state and callbacks supplied by
 `MainActivity`; `DashboardContent`, `ReadingHistory`, and `ReadingForm` handle the
 focused UI. `ReadingFormat` shares pure locale formatting. Reading, interval,
@@ -151,7 +155,7 @@ isolated Vico renderer has no role in consumption arithmetic.
 
 ## Device acceptance checklist
 
-Use a disposable session: force-stopping the app intentionally destroys readings.
+Use disposable readings: uninstalling the app or clearing its data destroys them.
 These are manual checks, not claims of completed device verification.
 Verify meaningful screen-reader labels for actions and readable dates/values in
 the numeric list; no essential value requires interpreting or touching the chart.
@@ -230,8 +234,13 @@ the numeric list; no essential value requires interpreting or touching the chart
   precision, localized number/date labels, and a timezone west/east of UTC.
   Date picker saves the exact selected date, including daylight-saving dates.
 - [ ] Rotate after adding notes and navigating on each tab: readings, totals,
-  period, and selected tab remain. Force-stop and relaunch: empty tracker on
-  Dashboard for the current week.
+  period, and selected tab remain. Force-stop and relaunch offline: saved readings
+  and recalculated totals remain, with Dashboard and the current week selected.
+- [ ] During loading, no empty tracker is shown and mutation actions are disabled. Simulate a
+  load error and retry without clearing data. Simulate failed saves and deletions:
+  the draft or confirmation remains open, committed readings stay unchanged, and
+  retry succeeds. Rotate during a pending operation and verify no duplicate or
+  premature success; cancel and outside dismissal are blocked while pending.
 - [ ] Use the keyboard and landscape mode: form fields, inline errors, Save/Cancel
   and date selection remain reachable; bars/keyboard do not obscure controls.
   Save is the primary action; Cancel does not mutate data. Scroll through a full
@@ -244,6 +253,9 @@ the numeric list; no essential value requires interpreting or touching the chart
   contrast (large text 3:1), and selection/errors are not communicated by color alone.
 
 ### Current implementation acceptance
+
+The historical checks below predate on-device persistence; they do not verify
+the new persistence or storage-failure behavior.
 
 On the API 35 emulator, exercised offline fresh launch, date entry, baseline-only
 and populated states, daily/monthly bars, a full 31-day chart, genuine-zero marks,

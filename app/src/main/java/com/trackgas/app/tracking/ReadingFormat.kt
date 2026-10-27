@@ -35,5 +35,6 @@ internal fun numberText(value: BigDecimal, locale: Locale, raw: Boolean = false)
     NumberFormat.getNumberInstance(locale).apply {
         isGroupingUsed = false
         maximumFractionDigits = if (raw) maxOf(0, value.scale()) else 3
+        if (raw) minimumFractionDigits = maxOf(0, value.scale())
         roundingMode = RoundingMode.HALF_UP
     }.format(value)

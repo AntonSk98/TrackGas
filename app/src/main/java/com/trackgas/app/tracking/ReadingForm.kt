@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -59,8 +60,8 @@ import java.util.Locale
  * are converted through UTC helpers, while [today] disables future selections.
  * [readings] supplies the authoritative snapshot for immediate date feedback.
  *
- * [onSave] validates and publishes through the ViewModel, returning inline field errors.
- * Only an error-free save closes the form. Cancel/dismiss discards the draft without
+ * [onSave] starts an asynchronous operation; committed success closes the form.
+ * Cancel/dismiss discards the draft without
  * publishing it. Compact-height layouts scroll the whole form so a landscape
  * keyboard cannot squeeze a field behind a pinned action row.
  */
@@ -72,24 +73,38 @@ internal fun ReadingForm(
     initialDate: LocalDate,
     today: LocalDate,
     locale: Locale,
-    onSave: (LocalDate?, String) -> ReadingErrors,
+    loadState: ReadingLoadState,
+    operation: ReadingOperation,
+    canSubmit: Boolean,
+    onRetryLoad: () -> Unit,
+    onConsumeOperation: () -> Unit,
+    onSave: (LocalDate?, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var date by remember { mutableStateOf<LocalDate?>(reading?.date ?: initialDate) }
-    var value by remember { mutableStateOf(reading?.let { numberText(it.cubicMetres, locale, raw = true) } ?: "") }
-    var errors by remember { mutableStateOf(ReadingErrors()) }
-    var choosingDate by remember { mutableStateOf(false) }
+    var dateIso by rememberSaveable { mutableStateOf((reading?.date ?: initialDate).toString()) }
+    val date = LocalDate.parse(dateIso)
+    var value by rememberSaveable { mutableStateOf(reading?.let { numberText(it.cubicMetres, locale, raw = true) } ?: "") }
+    var choosingDate by rememberSaveable { mutableStateOf(false) }
+    var duplicateDismissed by rememberSaveable { mutableStateOf(false) }
+    val pending = operation == ReadingOperation.Pending
+    val errors = when (operation) {
+        is ReadingOperation.Invalid -> operation.errors
+        ReadingOperation.Missing -> ReadingErrors(value = ReadingError.MISSING_READING)
+        else -> ReadingErrors()
+    }
+    val duplicate = reading == null && errors.date == ReadingError.DUPLICATE_DATE
+    val showPicker = choosingDate || (duplicate && !duplicateDismissed)
     val compactHeight = LocalConfiguration.current.screenHeightDp < 480
     Dialog(
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!pending) onDismiss() },
     ) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.matchParentSize().pointerInput(onDismiss) {
-                detectTapGestures { onDismiss() }
+            Box(Modifier.matchParentSize().pointerInput(onDismiss, pending) {
+                detectTapGestures { if (!pending) onDismiss() }
             })
             Surface(
                 modifier = Modifier.safeDrawingPadding().imePadding()
@@ -111,8 +126,7 @@ internal fun ReadingForm(
                             stringResource(if (reading == null) R.string.add_reading else R.string.edit_reading),
                             style = MaterialTheme.typography.headlineSmall,
                         )
-                        val displayedDate = (reading?.date ?: date)?.let { dateText(it, locale) }
-                            ?: stringResource(R.string.date_required)
+                        val displayedDate = dateText(reading?.date ?: date, locale)
                         Box {
                             OutlinedTextField(
                                 value = displayedDate,
@@ -128,16 +142,20 @@ internal fun ReadingForm(
                                 val chooseDateLabel = stringResource(R.string.choose_date, displayedDate)
                                 Box(
                                     Modifier.matchParentSize()
-                                        .clickable(role = Role.Button) { choosingDate = true }
+                                        .clickable(enabled = !pending, role = Role.Button) { choosingDate = true }
                                         .semantics { contentDescription = chooseDateLabel },
                                 )
                             }
                         }
-                        errors.date?.let { DateError(it) }
+                        errors.date?.takeUnless { duplicate }?.let { DateError(it) }
                         OutlinedTextField(
                             value = value,
-                            onValueChange = { value = it; errors = errors.copy(value = null) },
+                            onValueChange = {
+                                value = it
+                                if (operation != ReadingOperation.Idle) onConsumeOperation()
+                            },
                             modifier = Modifier.fillMaxWidth(),
+                            enabled = !pending,
                             label = { Text(stringResource(R.string.value_label)) },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             singleLine = true,
@@ -146,30 +164,43 @@ internal fun ReadingForm(
                                 { Text(stringResource(errorResource(error))) }
                             },
                         )
+                        if (operation == ReadingOperation.Failed) {
+                            Text(
+                                stringResource(R.string.save_storage_error),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            )
+                        }
+                        if (loadState == ReadingLoadState.ERROR) {
+                            Text(
+                                stringResource(R.string.load_storage_error),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            )
+                            TextButton(onClick = onRetryLoad) { Text(stringResource(R.string.retry)) }
+                        } else if (loadState == ReadingLoadState.LOADING) {
+                            Text(stringResource(R.string.loading_readings))
+                        }
+                        if (pending) Text(stringResource(R.string.saving_reading))
                     }
                     FlowRow(
                         modifier = Modifier.fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = if (compactHeight) 4.dp else 8.dp),
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-                        Button(onClick = {
-                            errors = onSave(reading?.date ?: date, value)
-                            if (reading == null && errors.date == ReadingError.DUPLICATE_DATE) {
-                                errors = errors.copy(date = null)
-                                choosingDate = true
-                            } else if (errors.isEmpty) {
-                                onDismiss()
-                            }
+                        TextButton(onClick = onDismiss, enabled = !pending) { Text(stringResource(R.string.cancel)) }
+                        Button(enabled = !pending && canSubmit, onClick = {
+                            duplicateDismissed = false
+                            onSave(reading?.date ?: date, value)
                         }) { Text(stringResource(R.string.save)) }
                     }
                 }
             }
         }
     }
-    if (reading == null && choosingDate) {
+    if (reading == null && showPicker) {
         val picker = rememberDatePickerState(
-            initialSelectedDateMillis = date?.toPickerMillis(),
+            initialSelectedDateMillis = date.toPickerMillis(),
             selectableDates = remember(today) {
                 object : SelectableDates {
                     override fun isSelectableDate(utcTimeMillis: Long): Boolean = pickerDate(utcTimeMillis) <= today
@@ -181,18 +212,23 @@ internal fun ReadingForm(
             validateReadingDate(readings, reading?.id, pickerDate(it), today)
         }
         DatePickerDialog(
-            onDismissRequest = { choosingDate = false },
+            onDismissRequest = { choosingDate = false; duplicateDismissed = true },
             confirmButton = {
                 TextButton(
                     enabled = picker.selectedDateMillis != null && pickerDateError == null,
                     onClick = {
-                        date = picker.selectedDateMillis?.let(::pickerDate)
-                        errors = errors.copy(date = null)
+                        picker.selectedDateMillis?.let { dateIso = pickerDate(it).toString() }
+                        if (operation != ReadingOperation.Idle) onConsumeOperation()
                         choosingDate = false
+                        duplicateDismissed = true
                     },
                 ) { Text(stringResource(R.string.confirm_date)) }
             },
-            dismissButton = { TextButton(onClick = { choosingDate = false }) { Text(stringResource(R.string.cancel)) } },
+            dismissButton = {
+                TextButton(onClick = { choosingDate = false; duplicateDismissed = true }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
         ) {
             Column {
                 pickerDateError?.let {

@@ -21,11 +21,11 @@ The main screen SHALL display the app name "TrackGas" in a readable minimalist l
 - **THEN** "TrackGas", Dashboard and History tabs, weekly-by-default dashboard controls, and the add-reading icon are visible on a light screen, without reading history on Dashboard, sample analytics, or unfinished price or weather controls
 
 ### Requirement: Cohesive light visual hierarchy
-The interface SHALL use warm off-white backgrounds, white cards, teal accents, and consistent typography, spacing, and controls across Dashboard, History, Add/Edit, and delete confirmation. Dashboard SHALL emphasize the selected period and consumption total. History SHALL emphasize reading dates and values with identifiable Edit/Delete actions. Temporary-reading disclosure SHALL remain readable on both pages without dominating the content.
+The interface SHALL use warm off-white backgrounds, white cards, teal accents, and consistent typography, spacing, and controls across Dashboard, History, Add/Edit, and delete confirmation. Dashboard SHALL emphasize the selected period and consumption total. History SHALL emphasize reading dates and values with identifiable Edit/Delete actions. Local-storage disclosure SHALL remain readable on both pages without dominating the content.
 
 #### Scenario: Browse a populated dashboard
 - **WHEN** the user views a period with consumption
-- **THEN** Weekly/Monthly/Yearly selection, a prominent Consumption total, a chart, date-range navigation, and supporting values appear in that order beneath the shared toolbar and tabs, with temporary-reading disclosure visible in the page and date-range navigation directly beneath the chart inside its card
+- **THEN** Weekly/Monthly/Yearly selection, a prominent Consumption total, a chart, date-range navigation, and supporting values appear in that order beneath the shared toolbar and tabs, with local-storage disclosure visible in the page and date-range navigation directly beneath the chart inside its card
 
 #### Scenario: Manage a reading with consistent styling
 - **WHEN** the user opens History, edits a reading, or requests deletion
@@ -33,7 +33,7 @@ The interface SHALL use warm off-white backgrounds, white cards, teal accents, a
 
 #### Scenario: Understand temporary storage
 - **WHEN** the user opens either Dashboard or History
-- **THEN** the page includes readable text explaining that readings are temporary and lost when the app process ends
+- **THEN** the page includes readable text explaining that readings are stored on the device and are not backed up to the cloud
 
 ### Requirement: Responsive readable controls
 The interface SHALL keep tab, period, reading-management, and dialog actions reachable on compact screens, in landscape, with enlarged system fonts, and with the keyboard open. Interactive controls SHALL provide at least 48 dp touch targets and meaningful labels. Text SHALL meet 4.5:1 contrast for normal text and 3:1 for large text against its surface. Color SHALL NOT be the only indication of selection or error.

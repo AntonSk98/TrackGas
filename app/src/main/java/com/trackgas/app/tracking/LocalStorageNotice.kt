@@ -9,9 +9,9 @@ import androidx.compose.ui.res.stringResource
 import com.trackgas.app.R
 
 @Composable
-internal fun TemporaryNotice() {
+internal fun LocalStorageNotice() {
     Text(
-        stringResource(R.string.temporary_notice),
+        stringResource(R.string.local_storage_notice),
         modifier = Modifier.fillMaxWidth(),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -67,7 +67,7 @@ internal fun LazyListScope.dashboardItems(
             }
         }
     }
-    item(key = "temporary-notice") { TemporaryNotice() }
+    item(key = "local-notice") { LocalStorageNotice() }
     item(key = "consumption-summary") {
         Surface(
             modifier = Modifier.fillMaxWidth(),
