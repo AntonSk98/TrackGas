@@ -15,23 +15,14 @@ import kotlinx.coroutines.launch
 enum class TrackerTab { DASHBOARD, HISTORY }
 enum class ReadingLoadState { LOADING, READY, ERROR }
 
-sealed interface ReadingOperation {
-    data object Idle : ReadingOperation
-    data object Pending : ReadingOperation
-    data object Saved : ReadingOperation
-    data object Deleted : ReadingOperation
-    data class Invalid(val errors: ReadingErrors) : ReadingOperation
-    data object Missing : ReadingOperation
-    data object Failed : ReadingOperation
-}
-
 data class TrackerState(
     val readings: List<Reading>,
     val period: CalendarPeriod,
     val dashboard: Dashboard,
     val tab: TrackerTab = TrackerTab.DASHBOARD,
     val loadState: ReadingLoadState = ReadingLoadState.LOADING,
-    val operation: ReadingOperation = ReadingOperation.Idle,
+    val loadFailure: ReadingFailure? = null,
+    val dialog: ReadingDialog = ReadingDialog.Closed,
     val sessionId: String = UUID.randomUUID().toString(),
 )
 
@@ -44,9 +35,11 @@ class TrackerViewModel(
     var state by mutableStateOf(TrackerState(emptyList(), initialPeriod, dashboard(emptyList(), initialPeriod)))
         private set
     private var observation: Job? = null
+    private var observationGeneration = 0L
+    private var acceptedRevision = Long.MIN_VALUE
 
     init {
-        observeReadings(showLoading = true)
+        observeReadings()
     }
 
     fun today(): LocalDate = currentDate()
@@ -55,76 +48,121 @@ class TrackerViewModel(
         state = state.copy(tab = tab)
     }
 
-    fun selectPeriod(type: PeriodType) = publish(state.readings, CalendarPeriod.containing(type, today()))
+    fun selectPeriod(type: PeriodType) = project(state.readings, CalendarPeriod.containing(type, today()))
 
-    fun navigate(offset: Long) = publish(state.readings, state.period.navigate(offset))
+    fun navigate(offset: Long) = project(state.readings, state.period.navigate(offset))
 
     fun retryLoad() {
-        if (state.loadState == ReadingLoadState.ERROR) observeReadings(showLoading = true)
+        if (state.loadState == ReadingLoadState.ERROR) observeReadings()
     }
 
-    private fun observeReadings(showLoading: Boolean) {
+    private fun observeReadings() {
+        val generation = ++observationGeneration
         observation?.cancel()
-        if (showLoading) state = state.copy(loadState = ReadingLoadState.LOADING)
+        state = state.copy(loadState = ReadingLoadState.LOADING, loadFailure = null)
         observation = viewModelScope.launch {
             try {
-                repository.observeReadings().collect { readings ->
-                    publish(readings, state.period)
-                    state = state.copy(loadState = ReadingLoadState.READY)
+                repository.observeReadings().collect { snapshot ->
+                    if (generation != observationGeneration) return@collect
+                    acceptCommittedSnapshot(snapshot)
+                    state = state.copy(loadState = ReadingLoadState.READY, loadFailure = null)
                 }
             } catch (error: ReadingStorageException) {
-                state = state.copy(loadState = ReadingLoadState.ERROR)
+                if (generation == observationGeneration) {
+                    state = state.copy(loadState = ReadingLoadState.ERROR, loadFailure = ReadingFailure(error.category, ReadingAction.LOAD))
+                }
             }
         }
     }
 
-    fun consumeOperation() {
-        if (state.operation != ReadingOperation.Pending) {
-            state = state.copy(operation = ReadingOperation.Idle)
+    fun openAdd() = open(ReadingDialog.Editing(newId(), ReadingTarget.Add(today())))
+
+    fun openEdit(reading: Reading) = open(ReadingDialog.Editing(newId(), ReadingTarget.Edit(reading)))
+
+    fun openDelete(reading: Reading) = open(ReadingDialog.ConfirmingDeletion(newId(), reading))
+
+    private fun open(dialog: ReadingDialog) {
+        if (state.loadState == ReadingLoadState.READY && !state.dialog.pending) state = state.copy(dialog = dialog)
+    }
+
+    fun dismissDialog() {
+        if (!state.dialog.pending) state = state.copy(dialog = ReadingDialog.Closed)
+    }
+
+    fun clearDialogError() {
+        val dialog = state.dialog
+        if (dialog is ReadingDialog.Editing && dialog.phase !is SavePhase.Pending) {
+            state = state.copy(dialog = dialog.copy(phase = SavePhase.Ready))
         }
     }
 
-    fun save(id: String?, date: LocalDate?, input: String, locale: Locale) {
-        if (state.loadState != ReadingLoadState.READY || state.operation == ReadingOperation.Pending) return
-        state = state.copy(operation = ReadingOperation.Pending)
+    fun save(date: LocalDate?, input: String, locale: Locale) {
+        val dialog = state.dialog as? ReadingDialog.Editing ?: return
+        if (state.loadState != ReadingLoadState.READY || dialog.pending) return
+        val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
+        val meter = parseMeter(input, locale)
+        val intent = when (val target = dialog.target) {
+            is ReadingTarget.Add -> SaveReadingIntent.Add(date, meter, today())
+            is ReadingTarget.Edit -> SaveReadingIntent.Edit(target.reading.id, meter, today())
+        }
+        state = state.copy(dialog = dialog.copy(phase = SavePhase.Pending(request.requestId)))
         viewModelScope.launch {
             try {
-                when (val result = repository.save(id, date, input, today(), locale)) {
-                    is SaveReadingResult.Invalid -> state = state.copy(operation = ReadingOperation.Invalid(result.errors))
+                when (val result = repository.save(intent)) {
+                    is SaveReadingResult.Invalid -> finishSave(request, SavePhase.Invalid(result.errors))
                     is SaveReadingResult.Saved -> {
-                        publish(result.readings, state.period)
-                        observeReadings(showLoading = false)
-                        state = state.copy(operation = ReadingOperation.Saved)
+                        acceptCommittedSnapshot(result.snapshot)
+                        finishSave(request, null)
                     }
                 }
             } catch (error: ReadingStorageException) {
-                state = state.copy(operation = ReadingOperation.Failed)
+                finishSave(request, SavePhase.Failed(ReadingFailure(error.category, ReadingAction.SAVE)))
             }
         }
     }
 
-    fun delete(id: String) {
-        if (state.loadState != ReadingLoadState.READY || state.operation == ReadingOperation.Pending) return
-        state = state.copy(operation = ReadingOperation.Pending)
+    fun delete() {
+        val dialog = state.dialog as? ReadingDialog.ConfirmingDeletion ?: return
+        if (state.loadState != ReadingLoadState.READY || dialog.pending) return
+        val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
+        state = state.copy(dialog = dialog.copy(phase = DeletePhase.Pending(request.requestId)))
         viewModelScope.launch {
             try {
-                when (val result = repository.delete(id)) {
-                    DeleteReadingResult.Missing -> state = state.copy(operation = ReadingOperation.Missing)
+                when (val result = repository.delete(dialog.reading.id)) {
+                    DeleteReadingResult.Missing -> finishDelete(request, DeletePhase.Missing)
                     is DeleteReadingResult.Deleted -> {
-                        publish(result.readings, state.period)
-                        observeReadings(showLoading = false)
-                        state = state.copy(operation = ReadingOperation.Deleted)
+                        acceptCommittedSnapshot(result.snapshot)
+                        finishDelete(request, null)
                     }
                 }
             } catch (error: ReadingStorageException) {
-                state = state.copy(operation = ReadingOperation.Failed)
+                finishDelete(request, DeletePhase.Failed(ReadingFailure(error.category, ReadingAction.DELETE)))
             }
         }
     }
 
-    private fun publish(readings: List<Reading>, period: CalendarPeriod) {
-        val history = readings.sortedByDescending { it.date }
-        state = state.copy(readings = history, period = period, dashboard = dashboard(history, period))
+    private fun finishSave(request: ReadingRequest, phase: SavePhase?) {
+        state = state.copy(dialog = state.dialog.completeSave(request, state.sessionId, phase))
+    }
+
+    private fun finishDelete(request: ReadingRequest, phase: DeletePhase?) {
+        state = state.copy(dialog = state.dialog.completeDelete(request, state.sessionId, phase))
+    }
+
+    private fun newId() = UUID.randomUUID().toString()
+
+    private fun acceptCommittedSnapshot(snapshot: CommittedSnapshot) {
+        if (snapshot.revision <= acceptedRevision) return
+        acceptedRevision = snapshot.revision
+        // Reading equality includes BigDecimal scale. Avoid sorting/projecting duplicate data.
+        if (snapshot.readings.size == state.readings.size &&
+            snapshot.readings.associateBy { it.id } == state.readings.associateBy { it.id }
+        ) return
+        project(snapshot.readings.sortedByDescending { it.date }, state.period)
+    }
+
+    private fun project(readings: List<Reading>, period: CalendarPeriod) {
+        state = state.copy(readings = readings, period = period, dashboard = dashboard(readings, period))
     }
 
     companion object {

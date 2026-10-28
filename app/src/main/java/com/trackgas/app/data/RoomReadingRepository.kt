@@ -1,89 +1,82 @@
 package com.trackgas.app.data
 
-import android.database.SQLException
 import androidx.room.withTransaction
-import com.trackgas.app.tracking.DeleteReadingResult
-import com.trackgas.app.tracking.Reading
-import com.trackgas.app.tracking.ReadingError
-import com.trackgas.app.tracking.ReadingErrors
-import com.trackgas.app.tracking.ReadingRepository
-import com.trackgas.app.tracking.ReadingStorageException
-import com.trackgas.app.tracking.SaveReadingResult
-import com.trackgas.app.tracking.validateReading
-import java.io.IOException
-import java.time.DateTimeException
-import java.time.LocalDate
-import java.util.Locale
+import com.trackgas.app.tracking.*
 import java.util.UUID
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
-class RoomReadingRepository(private val database: ReadingDatabase) : ReadingRepository {
-    private val dao = database.readings()
+class RoomReadingRepository internal constructor(
+    private val database: ReadingDatabase,
+    private val dao: ReadingDao,
+    private val newIdentity: () -> String,
+) : ReadingRepository {
+    constructor(
+        database: ReadingDatabase,
+        newIdentity: () -> String = { UUID.randomUUID().toString() },
+    ) : this(database, database.readings(), newIdentity)
 
-    override fun observeReadings(): Flow<List<Reading>> =
-        dao.observeAll().map { rows -> rows.map { it.toReading() } }
-            .catch { failure -> throw storageFailure(failure) }
+    private val ordering = Mutex()
+    private var revision = 0L
 
-    override suspend fun save(
-        id: String?,
-        date: LocalDate?,
-        input: String,
-        today: LocalDate,
-        locale: Locale,
-    ): SaveReadingResult = storageOperation {
-        database.withTransaction {
-            val readings = dao.getAll().map { it.toReading() }
-            val existing = id?.let { target -> readings.firstOrNull { it.id == target } }
-            if (id != null && existing == null) {
-                return@withTransaction SaveReadingResult.Invalid(ReadingErrors(value = ReadingError.MISSING_READING))
+    override fun observeReadings(): Flow<CommittedSnapshot> =
+        dao.observeAll().map {
+            // Room payloads are only invalidation triggers: buffered rows may predate a commit.
+            ordering.withLock { snapshot(readRows()) }
+        }.catch { failure -> throw classifyReadingFailure(failure) }
+
+    override suspend fun save(intent: SaveReadingIntent): SaveReadingResult = readingStorageOperation {
+        ordering.withLock {
+            val result = database.withTransaction {
+                val readings = readRows()
+                val validation = when (intent) {
+                    is SaveReadingIntent.Add -> evaluateSave(readings, intent, newIdentity())
+                    is SaveReadingIntent.Edit -> evaluateSave(readings, intent)
+                }
+                val candidate = when (validation) {
+                    is ReadingValidation.Accepted -> validation.candidate
+                    is ReadingValidation.Rejected -> return@withTransaction SaveRows.Invalid(validation.errors)
+                }
+                if (intent is SaveReadingIntent.Add) {
+                    dao.insert(candidate.toEntity())
+                } else {
+                    check(dao.update(candidate.toEntity()) == 1) { "Reading disappeared during update" }
+                }
+                SaveRows.Accepted(readRows())
             }
-            val validation = validateReading(
-                readings, id ?: UUID.randomUUID().toString(), existing?.date ?: date, input, today, locale,
-            )
-            val candidate = validation.candidate
-                ?: return@withTransaction SaveReadingResult.Invalid(validation.errors)
-            if (existing == null) {
-                dao.insert(candidate.toEntity())
-            } else {
-                check(dao.update(candidate.toEntity()) == 1) { "Reading disappeared during update" }
+            // withTransaction has returned successfully; only now issue a committed revision.
+            when (result) {
+                is SaveRows.Invalid -> SaveReadingResult.Invalid(result.errors)
+                is SaveRows.Accepted -> SaveReadingResult.Saved(snapshot(result.readings))
             }
-            SaveReadingResult.Saved(dao.getAll().map { it.toReading() })
         }
     }
 
-    override suspend fun delete(id: String): DeleteReadingResult = storageOperation {
-        database.withTransaction {
-            if (dao.delete(id) == 0) {
-                DeleteReadingResult.Missing
-            } else {
-                DeleteReadingResult.Deleted(dao.getAll().map { it.toReading() })
+    override suspend fun delete(id: String): DeleteReadingResult = readingStorageOperation {
+        ordering.withLock {
+            val rows = database.withTransaction {
+                readRows()
+                if (dao.delete(id) == 0) null else readRows()
             }
+            if (rows == null) DeleteReadingResult.Missing else DeleteReadingResult.Deleted(snapshot(rows))
         }
     }
 
-    private suspend fun <T> storageOperation(block: suspend () -> T): T = try {
-        block()
-    } catch (error: SQLException) {
-        throw ReadingStorageException(error)
-    } catch (error: IOException) {
-        throw ReadingStorageException(error)
-    } catch (error: DateTimeException) {
-        throw ReadingStorageException(error)
-    } catch (error: IllegalArgumentException) {
-        throw ReadingStorageException(error)
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: IllegalStateException) {
-        throw ReadingStorageException(error)
+    private suspend fun readRows(): List<Reading> {
+        val readings = dao.getAll().map { it.toReading() }
+        readingCollectionViolation(readings)?.let {
+            throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored reading collection: $it"))
+        }
+        return readings
     }
 
-    private fun storageFailure(error: Throwable): Throwable = when (error) {
-        is CancellationException -> error
-        is SQLException, is IOException, is DateTimeException,
-        is IllegalArgumentException, is IllegalStateException -> ReadingStorageException(error)
-        else -> error
+    private fun snapshot(readings: List<Reading>) = CommittedSnapshot(++revision, readings)
+
+    private sealed interface SaveRows {
+        data class Invalid(val errors: ReadingErrors) : SaveRows
+        data class Accepted(val readings: List<Reading>) : SaveRows
     }
 }

@@ -36,20 +36,21 @@ class TrackGasApplicationTest {
             val firstId = UUID.randomUUID().toString()
             val secondId = UUID.randomUUID().toString()
             val factory = TrackerViewModel.factory(application.readingRepository)
+            val owner = application.trackerStoreOwner
             try {
-                val first = ViewModelProvider(application.trackerStore(firstId, 100), factory)[TrackerViewModel::class.java]
-                val recreated = ViewModelProvider(application.trackerStore(firstId, 100), factory)[TrackerViewModel::class.java]
-                val other = ViewModelProvider(application.trackerStore(secondId, 200), factory)[TrackerViewModel::class.java]
+                val first = ViewModelProvider(owner.obtain(firstId, 100, setOf(100, 200)), factory)[TrackerViewModel::class.java]
+                val recreated = ViewModelProvider(owner.obtain(firstId, 100, setOf(100, 200)), factory)[TrackerViewModel::class.java]
+                val other = ViewModelProvider(owner.obtain(secondId, 200, setOf(100, 200)), factory)[TrackerViewModel::class.java]
                 assertSame(first, recreated)
                 assertNotSame(first, other)
-                application.pruneTrackerStores(setOf(100))
-                val retained = ViewModelProvider(application.trackerStore(firstId, 100), factory)[TrackerViewModel::class.java]
-                val replacement = ViewModelProvider(application.trackerStore(secondId, 200), factory)[TrackerViewModel::class.java]
+                owner.prune(setOf(100))
+                val retained = ViewModelProvider(owner.obtain(firstId, 100, setOf(100, 200)), factory)[TrackerViewModel::class.java]
+                val replacement = ViewModelProvider(owner.obtain(secondId, 200, setOf(100, 200)), factory)[TrackerViewModel::class.java]
                 assertSame(first, retained)
                 assertNotSame(other, replacement)
             } finally {
-                application.releaseTrackerStore(firstId)
-                application.releaseTrackerStore(secondId)
+                owner.release(firstId)
+                owner.release(secondId)
             }
         }
     }

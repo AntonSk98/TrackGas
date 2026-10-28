@@ -51,7 +51,9 @@ field labelled **Date**. Long-press an entry to request deletion, then confirm o
 cancel. There are no separate Edit/Delete icons; both entry actions have accessible
 labels identifying the reading. Add uses the same outlined **Date** field; tap it
 to select a date. Tap outside
-the Add/Edit form, use Back, or choose Cancel to discard an unsaved draft.
+the Add/Edit form, use Back, or choose Cancel to discard an unsaved draft,
+except while a save is pending. Pending saves and deletions disable dismissal,
+fields, target switching, and duplicate submission until their result arrives.
 Only the date picker reports an existing reading, immediately during date
 selection. Opening Add/Edit itself shows no duplicate warning. Choose an
 available date to clear the error; editing a reading on its own date is allowed.
@@ -144,14 +146,75 @@ $env:JAVA_OPTS = $env:JAVA_OPTS -replace '%JAVA_OPTS%', ''
 
 `TrackerViewModel` is retained in an application-managed store for each activity; it
 publishes the committed snapshot and coordinates mutations through the local reading repository.
-`TrackerScreen` coordinates the Foundation pager, tabs, and shared dialogs using state and callbacks supplied by
-`MainActivity`; `DashboardContent`, `ReadingHistory`, and `ReadingForm` handle the
-focused UI. `ReadingFormat` shares pure locale formatting. Reading, interval,
+`TrackerViewModel` owns the exclusive Closed/Editing/deletion-confirmation state,
+its target, and request phases. Session, dialog, and request identities prevent
+stale completion from affecting another dialog; success closes it directly.
+`ReadingForm` owns only the saveable raw draft/date/picker feedback, explicitly
+restoring it only when both saved session and dialog identities match. Drafts
+survive matching recreation, not process death.
+`TrackerScreen` is a state/callback route supplied by `MainActivity`.
+`TrackerPager` owns tab animation, continuous indicator placement and independent
+page scroll state; `ReadingLoadContent` and `DeleteReadingDialog` render focused
+states/events. `ReadingForm` coordinates its draft and Add-only picker;
+`ReadingFormLayout` renders fields/actions, preserving compact-height scrolling
+and keyboard/system insets. `DashboardContent` and `ReadingHistory` handle page
+content. `ReadingFormat` shares pure locale formatting. Reading, interval,
 coverage, and period models enforce their invariants; validation and consumption
 calculations remain independently testable without Android UI. `ui/theme` owns
 the light Material colors, typography, and shapes. The chart's pure projection
 keeps original decimal values and converts only rendering coordinates; the
 isolated Vico renderer has no role in consumption arithmetic.
+
+`parseMeter` converts locale text into a typed decimal/error before repository
+entry, retaining exact scale. `SaveReadingIntent` carries Add/Edit intent and the
+submission-time local date, never raw text or Locale. The shared pure
+`evaluateSave` policy resolves edits and checks fields/chronological neighbours
+against fresh rows inside Room's transaction; final validation and writes are
+atomic. Picker date checks are advisory only. No service layer or persistence
+format change is involved.
+Policy results are explicit `ReadingValidation.Accepted` (a non-null candidate)
+or `Rejected` (at least one field error). Typed Add policy requires a new identity;
+Edit policy accepts no replacement identity and uses its persisted target.
+Identity generation remains Add-only and inside repository transaction orchestration.
+
+Expected failures retain only a safe `StorageAccess`/`StoredData` category and
+Load/Save/Delete context in presentation state. Generic localized errors and
+normal reread/retry remain unchanged. Internal exceptions retain causes for
+controlled debugging, but no reading/input, SQL, database path or throwable
+message enters diagnostic state or logs. Cancellation and unrelated programming
+or invariant exceptions propagate unchanged. Retry never repairs, deletes or
+resets malformed stored records; there is no telemetry or network reporting.
+After individual rows decode, the repository checks collection identity/date
+uniqueness and chronological nondecreasing cumulative values before publication
+or mutation. `ReadingCollection` shares these checks with consumption interval
+construction. Inconsistent rows report `StoredData`, preserving the last accepted
+projection and open dialog; retry cannot repair or delete them.
+
+The application composes one `ReadingRepository`. Its process-local revision
+domain and mutex serialize mutation transactions with observation captures.
+Room Flow payloads are invalidation triggers: each capture rereads current rows
+under that mutex; mutation revisions are allocated only after commit returns.
+The ViewModel's sole snapshot reducer rejects stale revisions and preserves
+projection identity for identical readings (including exact decimal scale).
+Healthy observation is not restarted after mutations. Explicit failed-load
+retry uses a generation guard. A commit closes its matching dialog even if
+observation failed or newer data already arrived; it does not clear a load error.
+New mutations wait for successful load retry. Revisions never survive process
+death, and Room remains version 1 with unchanged schema and decimal strings.
+API KDoc on `ReadingRepository` and `CommittedSnapshot` defines capture/commit
+ordering, stable snapshot ownership, atomic writes, expected failures, and
+cancellation. Resubscription does not reset revisions, and replacing a repository
+beneath a live consumer's watermark is unsupported.
+
+The application-owned `TrackerStoreOwner` retains separate stores by saved
+activity UUID, including distinct activities in the same task. Ordinary
+activity scope would lose the required session on non-finishing destruction
+outside configuration changes. The owner retains active-task stores across
+such recreation, releases on finishing outside configuration change, and clears
+abandoned-task stores exactly once. Activity task discovery includes its own
+task even if the system's task list omits it. Process death discards the owner,
+dialogs and drafts; the lazy singleton repository reloads committed records into
+a new Dashboard/current-week session, not a restored transient session.
 
 ## Device acceptance checklist
 
@@ -252,7 +315,35 @@ the numeric list; no essential value requires interpreting or touching the chart
   controls have at least 48 dp touch targets. Normal text has at least 4.5:1
   contrast (large text 3:1), and selection/errors are not communicated by color alone.
 
-### Current implementation acceptance
+### Refactor verification (2026-10-28)
+
+- PowerShell README environment: all 76 JVM tests, `:app:assembleDebug`, and
+  all 34 `:app:connectedDebugAndroidTest` tests passed on the API 35 emulator.
+  Connected tests exercise real Room rollback/reopen, competing writes,
+  locked fresh capture/revisions, cancellation, two-session convergence,
+  classified failures, activity recreation and dialog/picker restoration.
+- Emulator acceptance: offline cold launch; exact-scale Add/backdating and a
+  known-zero day; duplicate picker feedback; German comma-decimal editing with
+  immutable dates; month/year and previous/next navigation; chart long-press
+  tooltip and ordinary chart-to-History swipe; reading tap/long-press,
+  cancelled/confirmed deletion and empty state after deletion.
+- Verified History survives rotation, 360 dp / 200% fonts reflow, and landscape
+  keyboard entry keeps form actions scroll-reachable. A live timezone change to
+  Pacific/Kiritimati updates a newly opened Add to the next date; switching back
+  to GMT preserves the open draft's date and final Save rejects it as future.
+  Force-stop/relaunch retained records/totals and reset to Dashboard/current week.
+- Controlled device UI tests additionally verify pending Back/outside/Cancel
+  guards, load/mutation errors and retry, same-session draft/picker restoration,
+  completed/fresh-session discard, and tab partial/reversed/boundary swipes with
+  independent scroll state. Retained-owner tests cover non-finishing destruction
+  and exactly-once cleanup; an actual Activity recreation test passes.
+
+Disposable acceptance readings were deleted through confirmation; timezone,
+app locale, density, font scale and rotation were restored. The checklist above
+remains a reusable checklist, not a claim that every historical arithmetic
+example was manually repeated in this pass.
+
+### Historical implementation acceptance
 
 The historical checks below predate on-device persistence; they do not verify
 the new persistence or storage-failure behavior.

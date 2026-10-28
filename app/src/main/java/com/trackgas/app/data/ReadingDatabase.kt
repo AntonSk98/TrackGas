@@ -12,6 +12,7 @@ import androidx.room.Update
 import com.trackgas.app.tracking.Reading
 import java.math.BigDecimal
 import java.time.LocalDate
+import java.time.format.DateTimeParseException
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "readings", indices = [Index(value = ["date"], unique = true)])
@@ -21,8 +22,21 @@ data class ReadingEntity(
     val cubicMetres: String,
 )
 
-internal fun ReadingEntity.toReading(): Reading =
-    Reading(id, LocalDate.parse(date), BigDecimal(cubicMetres))
+internal fun ReadingEntity.toReading(): Reading {
+    if (id.isBlank()) throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored identity"))
+    val parsedDate = try {
+        LocalDate.parse(date)
+    } catch (error: DateTimeParseException) {
+        throw StoredReadingDecodingException(error)
+    }
+    val value = try {
+        BigDecimal(cubicMetres)
+    } catch (error: NumberFormatException) {
+        throw StoredReadingDecodingException(error)
+    }
+    if (value.signum() < 0) throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored meter value"))
+    return Reading(id, parsedDate, value)
+}
 
 internal fun Reading.toEntity(): ReadingEntity =
     ReadingEntity(id, date.toString(), cubicMetres.toString())

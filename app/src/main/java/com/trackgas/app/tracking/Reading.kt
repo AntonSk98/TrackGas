@@ -5,7 +5,7 @@ import java.time.LocalDate
 
 /**
  * An actual cumulative meter observation, not a calculated daily consumption value.
- * Construction enforces intrinsic identity/value invariants; [validateReading] handles
+ * Construction enforces intrinsic identity/value invariants; [evaluateSave] handles
  * date eligibility and chronology against other saved readings.
  *
  * @property id Stable identity preserved when the observation's date or value is edited.

@@ -12,6 +12,10 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -20,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -49,6 +54,7 @@ class TrackerScreenPersistenceUiTest {
     private var retryCalls = 0
     private var consumed = 0
     private var lastValue = ""
+    private var nextDialog = 0
 
     private fun snapshot(
         readings: List<Reading> = emptyList(),
@@ -78,18 +84,25 @@ class TrackerScreenPersistenceUiTest {
                         retryCalls++
                         state = state.copy(loadState = ReadingLoadState.LOADING)
                     },
-                    onConsumeOperation = {
+                    onOpenAdd = { state = state.copy(dialog = ReadingDialog.Editing("dialog-${++nextDialog}", ReadingTarget.Add(today))) },
+                    onOpenEdit = { state = state.copy(dialog = ReadingDialog.Editing("dialog-${++nextDialog}", ReadingTarget.Edit(it))) },
+                    onOpenDelete = { state = state.copy(dialog = ReadingDialog.ConfirmingDeletion("dialog-${++nextDialog}", it)) },
+                    onDismissDialog = { if (!state.dialog.pending) state = state.copy(dialog = ReadingDialog.Closed) },
+                    onClearDialogError = {
                         consumed++
-                        state = state.copy(operation = ReadingOperation.Idle)
+                        val dialog = state.dialog as ReadingDialog.Editing
+                        state = state.copy(dialog = dialog.copy(phase = SavePhase.Ready))
                     },
-                    onSave = { _, _, value, _ ->
+                    onSave = { _, value, _ ->
                         saveCalls++
                         lastValue = value
-                        state = state.copy(operation = ReadingOperation.Pending)
+                        val dialog = state.dialog as ReadingDialog.Editing
+                        state = state.copy(dialog = dialog.copy(phase = SavePhase.Pending("request-$saveCalls")))
                     },
                     onDelete = {
                         deleteCalls++
-                        state = state.copy(operation = ReadingOperation.Pending)
+                        val dialog = state.dialog as ReadingDialog.ConfirmingDeletion
+                        state = state.copy(dialog = dialog.copy(phase = DeletePhase.Pending("request-$deleteCalls")))
                     },
                 )
             }
@@ -97,8 +110,16 @@ class TrackerScreenPersistenceUiTest {
         return restoration
     }
 
-    private fun operation(value: ReadingOperation) {
-        rule.runOnIdle { state = state.copy(operation = value) }
+    private fun savePhase(value: SavePhase) {
+        rule.runOnIdle { state = state.copy(dialog = (state.dialog as ReadingDialog.Editing).copy(phase = value)) }
+    }
+
+    private fun deletePhase(value: DeletePhase) {
+        rule.runOnIdle { state = state.copy(dialog = (state.dialog as ReadingDialog.ConfirmingDeletion).copy(phase = value)) }
+    }
+
+    private fun completed() {
+        rule.runOnIdle { state = state.copy(dialog = ReadingDialog.Closed) }
     }
 
     private fun openAdd() {
@@ -109,8 +130,12 @@ class TrackerScreenPersistenceUiTest {
         rule.onNode(hasSetTextAction()).performTextInput(value)
     }
 
+    private fun submitSave() {
+        rule.onNodeWithText(text(R.string.save)).performSemanticsAction(SemanticsActions.OnClick) { it() }
+    }
+
     private fun assertDraft(value: String) {
-        rule.onNode(hasText(value, substring = true)).assertTextContains(value)
+        rule.onNode(hasText(value, substring = true) and hasText(text(R.string.value_label))).assertTextContains(value)
     }
 
     private fun openDelete() {
@@ -144,34 +169,40 @@ class TrackerScreenPersistenceUiTest {
         val restoration = showScreen()
         openAdd()
         enterValue("12")
-        rule.onNodeWithText(text(R.string.save)).performClick()
-        operation(ReadingOperation.Invalid(ReadingErrors(value = ReadingError.BELOW_PREVIOUS)))
+        submitSave()
+        savePhase(SavePhase.Invalid(ReadingErrors(value = ReadingError.BELOW_PREVIOUS)))
         rule.onNodeWithText(text(R.string.below_previous)).assertIsDisplayed()
         restoration.emulateSavedInstanceStateRestore()
         assertDraft("12")
         rule.onNodeWithText(text(R.string.below_previous)).assertIsDisplayed()
-        rule.runOnIdle { assertEquals(0, consumed) }
+        val before = consumed
 
         rule.onNode(hasSetTextAction()).performTextReplacement("123")
         rule.onNodeWithText(text(R.string.below_previous)).assertDoesNotExist()
         assertDraft("123")
-        rule.runOnIdle { assertEquals(1, consumed) }
+        rule.runOnIdle { assertEquals(before + 1, consumed) }
     }
 
     @Test
     fun duplicateSaveOpensPickerWithoutDiscardingDraft() {
         val duplicate = reading.copy(date = today)
         state = snapshot(readings = listOf(duplicate))
-        showScreen()
+        val restoration = showScreen()
         openAdd()
         enterValue("456")
-        rule.onNodeWithText(text(R.string.save)).performClick()
-        operation(ReadingOperation.Invalid(ReadingErrors(date = ReadingError.DUPLICATE_DATE)))
+        submitSave()
+        savePhase(SavePhase.Invalid(ReadingErrors(date = ReadingError.DUPLICATE_DATE)))
         rule.onNodeWithText(text(R.string.duplicate_date)).assertIsDisplayed()
         rule.onNodeWithText(text(R.string.confirm_date)).assertIsNotEnabled()
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
         assertDraft("456")
         rule.onNodeWithText(text(R.string.duplicate_date)).assertDoesNotExist()
+        restoration.emulateSavedInstanceStateRestore()
+        assertDraft("456")
+        rule.onNodeWithText(text(R.string.duplicate_date)).assertDoesNotExist()
+        submitSave()
+        savePhase(SavePhase.Invalid(ReadingErrors(date = ReadingError.DUPLICATE_DATE)))
+        rule.onNodeWithText(text(R.string.duplicate_date)).assertIsDisplayed()
     }
 
     @Test
@@ -179,8 +210,8 @@ class TrackerScreenPersistenceUiTest {
         val restoration = showScreen()
         openAdd()
         enterValue("123.45")
-        rule.onNodeWithText(text(R.string.save)).performClick()
-        rule.onNodeWithText(text(R.string.saving_reading)).assertIsDisplayed()
+        submitSave()
+        rule.onNodeWithText(text(R.string.saving_reading)).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText(text(R.string.save)).assertIsNotEnabled()
         rule.onNodeWithText(text(R.string.cancel)).assertIsNotEnabled()
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
@@ -190,25 +221,25 @@ class TrackerScreenPersistenceUiTest {
         rule.onNodeWithText(text(R.string.save)).assertIsNotEnabled()
         rule.runOnIdle { assertEquals(1, saveCalls) }
 
-        operation(ReadingOperation.Failed)
+        savePhase(SavePhase.Failed(ReadingFailure(ReadingFailureCategory.STORED_DATA, ReadingAction.SAVE)))
         rule.onNodeWithText(text(R.string.save_storage_error)).assertIsDisplayed()
         restoration.emulateSavedInstanceStateRestore()
         assertDraft("123.45")
         rule.onNodeWithText(text(R.string.save_storage_error)).assertIsDisplayed()
-        rule.runOnIdle { assertEquals(0, consumed) }
-        rule.onNodeWithText(text(R.string.save)).performClick()
+        val before = consumed
+        submitSave()
         rule.runOnIdle {
             assertEquals(2, saveCalls)
             assertEquals("123.45", lastValue)
         }
-        operation(ReadingOperation.Saved)
+        completed()
         rule.onNodeWithText(text(R.string.save)).assertDoesNotExist()
         restoration.emulateSavedInstanceStateRestore()
         rule.onNodeWithText(text(R.string.save)).assertDoesNotExist()
-        rule.runOnIdle { assertEquals(1, consumed) }
+        rule.runOnIdle { assertEquals(before, consumed) }
         openAdd()
         rule.onNodeWithText(text(R.string.save)).assertIsDisplayed()
-        rule.runOnIdle { assertEquals(2, consumed) }
+        rule.runOnIdle { assertEquals(before, consumed) }
     }
 
     @Test
@@ -227,19 +258,21 @@ class TrackerScreenPersistenceUiTest {
         rule.onNodeWithText(text(R.string.delete)).assertIsNotEnabled()
         rule.runOnIdle { assertEquals(1, deleteCalls) }
 
-        operation(ReadingOperation.Failed)
+        deletePhase(DeletePhase.Failed(ReadingFailure(ReadingFailureCategory.STORAGE_ACCESS, ReadingAction.DELETE)))
         rule.onNodeWithText(text(R.string.delete_storage_error)).assertIsDisplayed()
         restoration.emulateSavedInstanceStateRestore()
         rule.onNodeWithText(text(R.string.delete_reading)).assertIsDisplayed()
         rule.onNodeWithText(text(R.string.delete_storage_error)).assertIsDisplayed()
         rule.runOnIdle { assertEquals(0, consumed) }
+        deletePhase(DeletePhase.Missing)
+        rule.onNodeWithText(text(R.string.reading_missing)).assertIsDisplayed()
         rule.onNodeWithText(text(R.string.delete)).performClick()
         rule.runOnIdle { assertEquals(2, deleteCalls) }
-        operation(ReadingOperation.Deleted)
+        completed()
         rule.onNodeWithText(text(R.string.delete_reading)).assertDoesNotExist()
         restoration.emulateSavedInstanceStateRestore()
         rule.onNodeWithText(text(R.string.delete_reading)).assertDoesNotExist()
-        rule.runOnIdle { assertEquals(1, consumed) }
+        rule.runOnIdle { assertEquals(0, consumed) }
     }
 
     @Test
@@ -247,12 +280,12 @@ class TrackerScreenPersistenceUiTest {
         val restoration = showScreen()
         openAdd()
         enterValue("123.45")
-        rule.onNodeWithText(text(R.string.save)).performClick()
+        submitSave()
         restoration.emulateSavedInstanceStateRestore()
         assertDraft("123.45")
 
         rule.runOnIdle {
-            state = state.copy(sessionId = "new-view-model", operation = ReadingOperation.Idle)
+            state = state.copy(sessionId = "new-view-model", dialog = ReadingDialog.Closed)
         }
         rule.onNodeWithText(text(R.string.save)).assertDoesNotExist()
         openAdd()
@@ -288,5 +321,39 @@ class TrackerScreenPersistenceUiTest {
         rule.onNodeWithText(text(R.string.delete)).assertIsNotEnabled()
         rule.runOnIdle { state = state.copy(loadState = ReadingLoadState.READY) }
         rule.onNodeWithText(text(R.string.delete)).assertIsEnabled()
+    }
+
+    @Test
+    fun restoredDraftRequiresBothSessionAndDialogIdentity() {
+        val restoration = showScreen()
+        openAdd()
+        enterValue("987.6500")
+        rule.runOnIdle {
+            state = state.copy(dialog = ReadingDialog.Editing("replacement", ReadingTarget.Add(today.minusDays(2))))
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        rule.onNodeWithText("987.6500").assertDoesNotExist()
+        enterValue("456.000")
+        rule.runOnIdle { state = state.copy(sessionId = "fresh-session") }
+        restoration.emulateSavedInstanceStateRestore()
+        rule.onNodeWithText("456.000").assertDoesNotExist()
+    }
+
+    @Test
+    fun editDateIsReadOnlyAndOutsideDismissalDiscardsOnlyNonPendingDrafts() {
+        state = snapshot(readings = listOf(reading), tab = TrackerTab.HISTORY)
+        showScreen()
+        rule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.OnLongClick) and hasText("m³", substring = true)).performClick()
+        rule.onNode(hasText(dateText(reading.date, context.resources.configuration.locales[0])) and hasText(text(R.string.date))).performClick()
+        rule.onNodeWithText(text(R.string.confirm_date)).assertDoesNotExist()
+        rule.onNodeWithText(text(R.string.save)).assertIsDisplayed()
+        rule.onNode(isDialog()).performTouchInput { click(Offset(2f, 2f)) }
+        rule.onNodeWithText(text(R.string.save)).assertDoesNotExist()
+        openAdd()
+        enterValue("123")
+        submitSave()
+        rule.onNode(isDialog()).performTouchInput { click(Offset(2f, 2f)) }
+        assertDraft("123")
+        rule.onNodeWithText(text(R.string.save)).assertIsNotEnabled()
     }
 }

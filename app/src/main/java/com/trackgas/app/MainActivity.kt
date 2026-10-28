@@ -23,14 +23,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var trackerId: String
     private val tracker by lazy {
         val app = application as TrackGasApplication
-        ViewModelProvider(app.trackerStore(trackerId, taskId), TrackerViewModel.factory(app.readingRepository))[TrackerViewModel::class.java]
+        val activeTasks = getSystemService(ActivityManager::class.java).appTasks.map { it.taskInfo.id }.toSet()
+        val store = app.trackerStoreOwner.obtain(trackerId, taskId, activeTasks)
+        ViewModelProvider(store, TrackerViewModel.factory(app.readingRepository))[TrackerViewModel::class.java]
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         trackerId = savedInstanceState?.getString(TRACKER_ID) ?: UUID.randomUUID().toString()
-        val activeTasks = getSystemService(ActivityManager::class.java).appTasks.map { it.taskInfo.id }.toSet() + taskId
-        (application as TrackGasApplication).pruneTrackerStores(activeTasks)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
@@ -46,9 +46,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (isFinishing && !isChangingConfigurations) {
-            (application as TrackGasApplication).releaseTrackerStore(trackerId)
-        }
+        (application as TrackGasApplication).trackerStoreOwner.onDestroyed(trackerId, isFinishing, isChangingConfigurations)
         super.onDestroy()
     }
 
@@ -68,7 +66,11 @@ private fun TrackGasApp(tracker: TrackerViewModel) {
             onSelectPeriod = tracker::selectPeriod,
             onNavigate = tracker::navigate,
             onRetryLoad = tracker::retryLoad,
-            onConsumeOperation = tracker::consumeOperation,
+            onOpenAdd = tracker::openAdd,
+            onOpenEdit = tracker::openEdit,
+            onOpenDelete = tracker::openDelete,
+            onDismissDialog = tracker::dismissDialog,
+            onClearDialogError = tracker::clearDialogError,
             onSave = tracker::save,
             onDelete = tracker::delete,
         )

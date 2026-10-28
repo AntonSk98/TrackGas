@@ -14,46 +14,48 @@ class ReadingValidationTest {
         Reading("b", today.minusDays(1), BigDecimal("120")),
     )
     private fun validate(input: String, date: LocalDate? = today.minusDays(2), id: String = "new", locale: Locale = Locale.US) =
-        validateReading(readings, id, date, input, today, locale)
+        if (id == "new") evaluateSave(readings, SaveReadingIntent.Add(date, parseMeter(input, locale), today), id)
+        else evaluateSave(readings, SaveReadingIntent.Edit(id, parseMeter(input, locale), today))
 
     @Test fun rejectsInvalidValuesAndDatesWithoutMutation() {
         val original = readings.toList()
-        assertEquals(ReadingError.VALUE_REQUIRED, validate(" ").errors.value)
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(value = ReadingError.VALUE_REQUIRED)), validate(" "))
         for (input in listOf("NaN", "Infinity", "1e2", "100x", "1,000.2", "100.2.3", ".5")) {
-            assertEquals(input, ReadingError.INVALID_NUMBER, validate(input).errors.value)
+            assertEquals(input, ReadingValidation.Rejected(ReadingErrors(value = ReadingError.INVALID_NUMBER)), validate(input))
         }
-        assertEquals(ReadingError.NEGATIVE_VALUE, validate("-1").errors.value)
-        assertEquals(ReadingError.DATE_REQUIRED, validate("110", null).errors.date)
-        assertEquals(ReadingError.FUTURE_DATE, validate("120", today.plusDays(1)).errors.date)
-        assertEquals(ReadingError.DUPLICATE_DATE, validate("120", today.minusDays(1)).errors.date)
-        assertEquals(ReadingError.BELOW_PREVIOUS, validate("99").errors.value)
-        assertEquals(ReadingError.ABOVE_NEXT, validate("125").errors.value)
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(value = ReadingError.NEGATIVE_VALUE)), validate("-1"))
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(date = ReadingError.DATE_REQUIRED)), validate("110", null))
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(date = ReadingError.FUTURE_DATE)), validate("120", today.plusDays(1)))
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(date = ReadingError.DUPLICATE_DATE)), validate("120", today.minusDays(1)))
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(value = ReadingError.BELOW_PREVIOUS)), validate("99"))
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(value = ReadingError.ABOVE_NEXT)), validate("125"))
         assertEquals(original, readings)
     }
 
     @Test fun acceptsLocaleDecimalsEqualValuesAndUnchangedEdit() {
-        assertEquals(BigDecimal("110.125"), validate("110,125", locale = Locale.GERMANY).candidate?.cubicMetres)
-        assertEquals(BigDecimal("110.125"), validate("110.125", locale = Locale.GERMANY).candidate?.cubicMetres)
-        assertEquals(ReadingError.INVALID_NUMBER, validate("110,125").errors.value)
-        assertTrue(validate("100").errors.isEmpty)
-        assertTrue(validate("120").errors.isEmpty)
-        assertEquals("b", validate("120", today.minusDays(1), "b").candidate?.id)
-        assertEquals(ReadingError.BELOW_PREVIOUS, validate("99", today, "b").errors.value)
-        assertEquals(ReadingError.ABOVE_NEXT, validate("125", today.minusDays(5), "a").errors.value)
+        val expected = ReadingValidation.Accepted(Reading("new", today.minusDays(2), BigDecimal("110.125")))
+        assertEquals(expected, validate("110,125", locale = Locale.GERMANY))
+        assertEquals(expected, validate("110.125", locale = Locale.GERMANY))
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(value = ReadingError.INVALID_NUMBER)), validate("110,125"))
+        assertTrue(validate("100") is ReadingValidation.Accepted)
+        assertTrue(validate("120") is ReadingValidation.Accepted)
+        assertEquals(ReadingValidation.Accepted(readings[1]), validate("120", today.minusDays(1), "b"))
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(value = ReadingError.BELOW_PREVIOUS)), validate("99", today, "b"))
+        assertEquals(ReadingValidation.Rejected(ReadingErrors(value = ReadingError.ABOVE_NEXT)), validate("125", today.minusDays(5), "a"))
     }
 
     @Test fun localizedEditTextCanBeParsedWithoutPrecisionLoss() {
         val value = BigDecimal("110.123456789")
         for (locale in listOf(Locale.US, Locale.GERMANY, Locale.forLanguageTag("ar-EG"))) {
             val text = numberText(value, locale, raw = true)
-            assertEquals(value, validate(text, locale = locale).candidate?.cubicMetres)
+            assertEquals(ReadingValidation.Accepted(Reading("new", today.minusDays(2), value)), validate(text, locale = locale))
         }
     }
 
     @Test fun liveDateValidationMatchesSaveWithoutRequiringAMeterValue() {
         for (date in listOf(null, today.plusDays(1), today.minusDays(1), today.minusDays(2))) {
             assertEquals(
-                validate("", date).errors.date,
+                (validate("", date) as ReadingValidation.Rejected).errors.date,
                 validateReadingDate(readings, null, date, today),
             )
         }
@@ -74,5 +76,13 @@ class ReadingValidationTest {
         assertNull(validateReadingDate(emptyList(), null, date, today))
         assertEquals(ReadingError.DUPLICATE_DATE, validateReadingDate(readings, null, date, today))
         assertNull(validateReadingDate(readings.filterNot { it.date == date }, null, date, today))
+    }
+
+    @Test fun validationVariantsCannotPairAcceptedCandidatesWithRejectionErrors() {
+        val accepted = ReadingValidation.Accepted(readings[0])
+        assertSame(readings[0], accepted.candidate)
+        assertThrows(IllegalArgumentException::class.java) { ReadingValidation.Rejected(ReadingErrors()) }
+        val rejected = ReadingValidation.Rejected(ReadingErrors(value = ReadingError.INVALID_NUMBER))
+        assertThrows(IllegalArgumentException::class.java) { rejected.copy(errors = ReadingErrors()) }
     }
 }

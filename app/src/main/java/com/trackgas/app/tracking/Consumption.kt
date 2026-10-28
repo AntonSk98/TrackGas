@@ -15,9 +15,10 @@ import java.time.temporal.ChronoUnit
  */
 data class ReadingInterval(val earlier: Reading, val later: Reading) {
     init {
-        require(earlier.id != later.id) { "Interval endpoints must have distinct identities" }
+        readingCollectionViolation(listOf(earlier, later))?.let {
+            throw IllegalArgumentException("Invalid reading collection: $it")
+        }
         require(earlier.date < later.date) { "Interval dates must increase strictly" }
-        require(earlier.cubicMetres <= later.cubicMetres) { "Cumulative meter values must not decrease" }
     }
 
     val firstCoveredDate: LocalDate get() = earlier.date.plusDays(1)
@@ -34,7 +35,9 @@ data class ReadingInterval(val earlier: Reading, val later: Reading) {
  * Empty input and a lone baseline produce no intervals.
  */
 fun readingIntervals(readings: List<Reading>): List<ReadingInterval> {
-    require(readings.map { it.id }.toSet().size == readings.size) { "Reading identities must be unique" }
+    readingCollectionViolation(readings)?.let {
+        throw IllegalArgumentException("Invalid reading collection: $it")
+    }
     return readings.sortedBy { it.date }.zipWithNext { earlier, later -> ReadingInterval(earlier, later) }
 }
 
