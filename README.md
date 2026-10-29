@@ -65,8 +65,8 @@ available date to clear the error; editing a reading on its own date is allowed.
 Save still validates the complete draft and opens the picker if its date is a
 duplicate, without saving or losing your input.
 
-The **Tracker options** gear immediately left of Add on either tab offers only
-**Replace meter**. First save today's final old-meter reading through Add (or
+The **Tracker options** gear immediately left of Add on either tab offers
+**Replace meter** and **Purge data**. First save today's final old-meter reading through Add (or
 correct it in History). Open Replace meter to review today's read-only date and
 the saved final value, then choose **Confirm replacement**. There is no new-meter
 value to enter: confirmation automatically starts the new meter at zero on that
@@ -79,6 +79,12 @@ Replacement is today-only, once per calendar day, and cannot be undone. If the
 date or saved final reading changes, review the latest readings and reopen the form.
 Ordinary Add resolves historical dates to the meter covering that date and cannot
 add another reading on a replacement date.
+
+Choose **Purge data** to review a warning and explicitly confirm removal
+of all readings, meter installations, replacement history, and calculated
+consumption. This cannot be undone. Cancel leaves everything unchanged; after
+confirmation the tracker starts empty with one original installation. The
+selected tab and period stay unchanged.
 
 Weekly/Monthly/Yearly stays above the consumption card. Previous/next arrows and
 the centred date range sit directly below the chart inside that card, before the
@@ -95,7 +101,7 @@ Android backup is disabled, but this is not a guarantee against device-vendor tr
 access on a compromised device. The selected tab and period survive rotation,
 but a fresh process opens Dashboard for the current Monday-to-Sunday week.
 Loading and storage errors are shown with retry; failed saves retain their draft
-and failed deletions retain their confirmation. Drafts are not durable records.
+and failed deletions and purges retain their confirmation. Drafts are not durable records.
 
 ## How consumption is calculated
 
@@ -190,7 +196,7 @@ $env:JAVA_OPTS = $env:JAVA_OPTS -replace '%JAVA_OPTS%', ''
 
 `TrackerViewModel` is retained in an application-managed store for each activity; it
 publishes the committed snapshot and coordinates mutations through the local reading repository.
-`TrackerViewModel` owns the exclusive Closed/Editing/deletion-confirmation state,
+`TrackerViewModel` owns the exclusive Closed/Editing/deletion/replacement/purge dialog state,
 its target, and request phases. Session, dialog, and request identities prevent
 stale completion from affecting another dialog; success closes it directly.
 `ReadingForm` owns only the saveable raw draft/date/picker feedback, explicitly
@@ -198,7 +204,8 @@ restoring it only when both saved session and dialog identities match. Drafts
 survive matching recreation, not process death.
 `TrackerScreen` is a state/callback route supplied by `MainActivity`.
 `TrackerPager` owns tab animation, continuous indicator placement and independent
-page scroll state; `ReadingLoadContent` and `DeleteReadingDialog` render focused
+page scroll state; `ReadingLoadContent`, `DeleteReadingDialog`, and
+`PurgeTrackingDataDialog` render focused
 states/events. `ReadingForm` coordinates its draft and Add-only picker;
 `ReadingFormLayout` renders fields/actions, preserving compact-height scrolling
 and keyboard/system insets. `DashboardContent` and `ReadingHistory` handle page

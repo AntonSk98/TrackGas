@@ -75,6 +75,8 @@ private fun TrackGasApp(tracker: TrackerViewModel) {
             onDelete = tracker::delete,
             onOpenReplacement = tracker::openReplacement,
             onReplaceMeter = tracker::replaceMeter,
+            onOpenPurge = tracker::openPurge,
+            onPurge = tracker::purge,
         )
     }
 }

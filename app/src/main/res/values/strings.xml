@@ -6,6 +6,11 @@
     <string name="edit_reading">Edit reading</string>
     <string name="tracker_options">Tracker options</string>
     <string name="replace_meter">Replace meter</string>
+    <string name="purge_tracking_data">Purge data</string>
+    <string name="purge_confirmation">Delete all readings, meter history, and consumption? This cannot be undone.</string>
+    <string name="purge_all_data">Purge all data</string>
+    <string name="purging_data">Purging data…</string>
+    <string name="purge_storage_error">Could not purge data. Try again.</string>
     <string name="confirm_replacement">Confirm replacement</string>
     <string name="replacing_meter">Replacing meter…</string>
     <string name="replacement_explanation">New meter starts at 0 m³ today.</string>

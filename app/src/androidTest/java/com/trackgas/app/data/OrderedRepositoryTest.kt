@@ -199,6 +199,129 @@ class OrderedRepositoryTest {
         return ReplaceMeterIntent(replacementTarget(repository.observeReadings().first().tracker, today), today)
     }
 
+    @Test fun delayedCaptureAndBufferedPayloadCannotResurrectPurgedData() = runBlocking {
+        val dao = database.readings()
+        val setup = RoomReadingRepository(database)
+        prepareReplacement(setup)
+        val payload = dao.getAll()
+        val captured = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val triggers = Channel<List<ReadingEntity>>(Channel.UNLIMITED)
+        var firstRead = true
+        val decorated = object : ReadingDao by dao {
+            override fun observeAll(): Flow<List<ReadingEntity>> = triggers.receiveAsFlow()
+            override suspend fun getAll(): List<ReadingEntity> {
+                val rows = dao.getAll()
+                if (firstRead) {
+                    firstRead = false
+                    captured.complete(Unit)
+                    release.await()
+                }
+                return rows
+            }
+        }
+        val repository = RoomReadingRepository(database, decorated) { java.util.UUID.randomUUID().toString() }
+        val snapshots = Channel<CommittedSnapshot>(Channel.UNLIMITED)
+        val observation = launch { repository.observeReadings().collect { snapshots.send(it) } }
+        try {
+            triggers.send(payload)
+            withTimeout(5_000) { captured.await() }
+            val purge = async(start = CoroutineStart.UNDISPATCHED) { repository.purge() }
+            assertFalse(purge.isCompleted)
+            release.complete(Unit)
+            val old = withTimeout(5_000) { snapshots.receive() }
+            val empty = withTimeout(5_000) { purge.await() }
+            triggers.send(payload)
+            val fresh = withTimeout(5_000) { snapshots.receive() }
+            assertTrue(old.revision < empty.revision && empty.revision < fresh.revision)
+            assertEquals(TrackerData(), empty.tracker)
+            assertEquals(empty.tracker, fresh.tracker)
+        } finally { observation.cancelAndJoin() }
+    }
+
+    @Test fun cancellationDuringEachPurgeWriteRollsBackWithoutRevision() = runBlocking {
+        val dao = database.readings()
+        val setup = RoomReadingRepository(database)
+        val replacement = prepareReplacement(setup)
+        setup.replaceMeter(replacement)
+        val before = setup.observeReadings().first().tracker
+        for (stage in 0..3) {
+            val entered = CompletableDeferred<Unit>()
+            suspend fun pause(current: Int) {
+                if (current == stage) { entered.complete(Unit); awaitCancellation() }
+            }
+            val decorated = object : ReadingDao by dao {
+                override suspend fun deleteReplacements() { dao.deleteReplacements(); pause(0) }
+                override suspend fun deleteReadings() { dao.deleteReadings(); pause(1) }
+                override suspend fun deleteInstallations() { dao.deleteInstallations(); pause(2) }
+                override suspend fun insertInstallation(installation: InstallationEntity) {
+                    dao.insertInstallation(installation); pause(3)
+                }
+            }
+            val repository = RoomReadingRepository(database, decorated) { "unused" }
+            val job = launch { repository.purge() }
+            withTimeout(5_000) { entered.await() }
+            job.cancelAndJoin()
+            assertTrue(job.isCancelled)
+            val after = repository.observeReadings().first()
+            assertEquals(1L, after.revision)
+            assertEquals(before, after.tracker)
+        }
+    }
+
+    @Test fun competingMutationsAreOrderedAroundPurgeAndStaleTargetsAreRejected() = runBlocking {
+        val repository = RoomReadingRepository(database)
+        val target = prepareReplacement(repository)
+        val final = target.target.finalReading!!
+        val before = repository.save(intent(24, "1099")) as SaveReadingResult.Saved
+        assertTrue(before.snapshot.readings.isNotEmpty())
+        val purge = async { repository.purge() }
+        val edit = async { repository.save(SaveReadingIntent.Edit(final.id, ParsedMeter.Value("1106".toBigDecimal()), today)) }
+        val replacement = async { repository.replaceMeter(target) }
+        val add = async { repository.save(intent(23, "1098")) }
+        val purged = purge.await()
+        val edited = edit.await()
+        val replaced = replacement.await()
+        val addedDuringRace = add.await() as SaveReadingResult.Saved
+        assertEquals(TrackerData(), purged.tracker)
+        if (edited is SaveReadingResult.Saved) assertTrue(edited.snapshot.revision < purged.revision)
+        else assertEquals(ReadingError.MISSING_READING, (edited as SaveReadingResult.Invalid).errors.value)
+        if (replaced is ReplaceMeterResult.Replaced) assertTrue(replaced.snapshot.revision < purged.revision)
+        else assertTrue(replaced is ReplaceMeterResult.Rejected)
+        val latest = repository.observeReadings().first()
+        if (addedDuringRace.snapshot.revision < purged.revision) assertEquals(TrackerData(), latest.tracker)
+        else assertEquals(addedDuringRace.snapshot.tracker, latest.tracker)
+        val added = repository.save(intent(25, "1100")) as SaveReadingResult.Saved
+        assertTrue(added.snapshot.revision > purged.revision)
+        assertEquals(ORIGINAL_INSTALLATION_ID, added.snapshot.readings.single { it.date.dayOfMonth == 25 }.installationId)
+        assertEquals(added.snapshot.tracker, repository.observeReadings().first().tracker)
+    }
+
+    @Test fun purgePropagatesToIndependentSessionsWithoutResettingNavigation() = runBlocking {
+        val repository = RoomReadingRepository(database)
+        prepareReplacement(repository)
+        val firstStore = ViewModelStore()
+        val secondStore = ViewModelStore()
+        try {
+            withContext(Dispatchers.Main) {
+                val factory = TrackerViewModel.factory(repository)
+                val first = ViewModelProvider(firstStore, factory)[TrackerViewModel::class.java]
+                val second = ViewModelProvider(secondStore, factory)[TrackerViewModel::class.java]
+                awaitState { first.state.loadState == ReadingLoadState.READY && second.state.loadState == ReadingLoadState.READY }
+                first.selectTab(TrackerTab.HISTORY)
+                first.selectPeriod(PeriodType.MONTH)
+                second.selectPeriod(PeriodType.YEAR)
+                repository.purge()
+                awaitState { first.state.tracker == TrackerData() && second.state.tracker == TrackerData() }
+                assertEquals(TrackerTab.HISTORY, first.state.tab)
+                assertEquals(PeriodType.MONTH, first.state.period.type)
+                assertEquals(PeriodType.YEAR, second.state.period.type)
+            }
+        } finally {
+            withContext(Dispatchers.Main) { firstStore.clear(); secondStore.clear() }
+        }
+    }
+
     @Test fun cancellationAtEveryReplacementWriteRollsBackFullAggregateWithoutRevision() = runBlocking {
         val dao = database.readings()
         val setup = RoomReadingRepository(database)

@@ -84,6 +84,8 @@ class TrackerViewModel(
         newId(), reading, if (state.tracker.isBoundaryReading(reading.id)) DeletePhase.Protected else DeletePhase.Ready,
     ))
 
+    fun openPurge() = open(ReadingDialog.ConfirmingPurge(newId()))
+
     fun openReplacement() {
         if (state.loadState != ReadingLoadState.READY || state.dialog.pending) return
         val date = today()
@@ -173,6 +175,25 @@ class TrackerViewModel(
                 finishDelete(request, DeletePhase.Failed(ReadingFailure(error.category, ReadingAction.DELETE)))
             }
         }
+    }
+
+    fun purge() {
+        val dialog = state.dialog as? ReadingDialog.ConfirmingPurge ?: return
+        if (state.loadState != ReadingLoadState.READY || dialog.pending) return
+        val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
+        state = state.copy(dialog = dialog.copy(phase = PurgePhase.Pending(request.requestId)))
+        viewModelScope.launch {
+            try {
+                acceptCommittedSnapshot(repository.purge())
+                finishPurge(request, null)
+            } catch (error: ReadingStorageException) {
+                finishPurge(request, PurgePhase.Failed(ReadingFailure(error.category, ReadingAction.PURGE)))
+            }
+        }
+    }
+
+    private fun finishPurge(request: ReadingRequest, phase: PurgePhase?) {
+        state = state.copy(dialog = state.dialog.completePurge(request, state.sessionId, phase))
     }
 
     private fun finishSave(request: ReadingRequest, phase: SavePhase?) {

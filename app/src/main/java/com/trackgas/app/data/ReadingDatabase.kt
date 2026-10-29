@@ -115,6 +115,15 @@ interface ReadingDao {
 
     @Query("DELETE FROM readings WHERE id = :id")
     suspend fun delete(id: String): Int
+
+    @Query("DELETE FROM replacements")
+    suspend fun deleteReplacements()
+
+    @Query("DELETE FROM readings")
+    suspend fun deleteReadings()
+
+    @Query("DELETE FROM installations")
+    suspend fun deleteInstallations()
 }
 
 @Database(entities = [ReadingEntity::class, InstallationEntity::class, ReplacementEntity::class], version = 2, exportSchema = true)

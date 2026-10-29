@@ -104,6 +104,8 @@ class TrackerScreenPersistenceUiTest {
                         val dialog = state.dialog as ReadingDialog.ConfirmingDeletion
                         state = state.copy(dialog = dialog.copy(phase = DeletePhase.Pending("request-$deleteCalls")))
                     },
+                    onOpenPurge = { error("Unexpected purge dialog") },
+                    onPurge = { error("Unexpected purge") },
                 )
             }
         }

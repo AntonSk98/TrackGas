@@ -29,11 +29,18 @@ sealed interface ReplacementPhase {
     data class Failed(val failure: ReadingFailure) : ReplacementPhase
 }
 
+sealed interface PurgePhase {
+    data object Ready : PurgePhase
+    data class Pending(val requestId: String) : PurgePhase
+    data class Failed(val failure: ReadingFailure) : PurgePhase
+}
+
 sealed interface ReadingDialog {
     data object Closed : ReadingDialog
     data class Editing(val dialogId: String, val target: ReadingTarget, val phase: SavePhase = SavePhase.Ready) : ReadingDialog
     data class ConfirmingDeletion(val dialogId: String, val reading: Reading, val phase: DeletePhase = DeletePhase.Ready) : ReadingDialog
     data class Replacing(val dialogId: String, val target: ReplacementTarget, val phase: ReplacementPhase = ReplacementPhase.Ready) : ReadingDialog
+    data class ConfirmingPurge(val dialogId: String, val phase: PurgePhase = PurgePhase.Ready) : ReadingDialog
 }
 
 val ReadingDialog.pending: Boolean
@@ -42,6 +49,7 @@ val ReadingDialog.pending: Boolean
         is ReadingDialog.Editing -> phase is SavePhase.Pending
         is ReadingDialog.ConfirmingDeletion -> phase is DeletePhase.Pending
         is ReadingDialog.Replacing -> phase is ReplacementPhase.Pending
+        is ReadingDialog.ConfirmingPurge -> phase is PurgePhase.Pending
     }
 
 data class ReadingRequest(val sessionId: String, val dialogId: String, val requestId: String)
@@ -63,6 +71,13 @@ internal fun ReadingDialog.completeDelete(request: ReadingRequest, sessionId: St
 internal fun ReadingDialog.completeReplacement(request: ReadingRequest, sessionId: String, phase: ReplacementPhase?): ReadingDialog =
     if (sessionId == request.sessionId && this is ReadingDialog.Replacing &&
         dialogId == request.dialogId && this.phase == ReplacementPhase.Pending(request.requestId)
+    ) {
+        if (phase == null) ReadingDialog.Closed else copy(phase = phase)
+    } else this
+
+internal fun ReadingDialog.completePurge(request: ReadingRequest, sessionId: String, phase: PurgePhase?): ReadingDialog =
+    if (sessionId == request.sessionId && this is ReadingDialog.ConfirmingPurge &&
+        dialogId == request.dialogId && this.phase == PurgePhase.Pending(request.requestId)
     ) {
         if (phase == null) ReadingDialog.Closed else copy(phase = phase)
     } else this

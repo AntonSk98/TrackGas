@@ -45,6 +45,93 @@ class RoomReadingRepositoryTest {
         else SaveReadingIntent.Edit(id, parseMeter(value, Locale.US), today))
 
     @Test
+    fun purgeRemovesMultipleReplacementHistoriesAndReseedsOriginalInstallation() = runBlocking {
+        save("2026-10-19", "100")
+        val final = (save("2026-10-20", "110") as SaveReadingResult.Saved).snapshot.readings.first()
+        val firstDay = LocalDate.parse("2026-10-20")
+        val first = repository.observeReadings().first()
+        val target = replacementTarget(first.tracker, firstDay)
+        assertTrue(repository.replaceMeter(ReplaceMeterIntent(target, firstDay)) is ReplaceMeterResult.Replaced)
+        save("2026-10-22", "5")
+        val secondDay = LocalDate.parse("2026-10-22")
+        val second = repository.observeReadings().first()
+        assertTrue(repository.replaceMeter(ReplaceMeterIntent(replacementTarget(second.tracker, secondDay), secondDay)) is ReplaceMeterResult.Replaced)
+        assertEquals(DeleteReadingResult.Protected, repository.delete(final.id))
+        val populated = repository.observeReadings().first()
+        assertEquals(2, populated.tracker.replacements.size)
+
+        val purged = repository.purge()
+        assertTrue(purged.revision > populated.revision)
+        assertEquals(TrackerData(), purged.tracker)
+        assertEquals(TrackerData(), repository.observeReadings().first().tracker)
+        val repeated = repository.purge()
+        assertTrue(repeated.revision > purged.revision)
+        assertEquals(TrackerData(), repeated.tracker)
+    }
+
+    @Test
+    fun purgeFailuresAndCancellationRollbackEveryStage() = runBlocking {
+        save("2026-10-19", "100")
+        save("2026-10-20", "110")
+        val date = LocalDate.parse("2026-10-20")
+        val tracker = repository.observeReadings().first().tracker
+        repository.replaceMeter(ReplaceMeterIntent(replacementTarget(tracker, date), date))
+        val dao = database.readings()
+
+        for (stage in 0..3) {
+            for (kind in 0..2) {
+                val decorated = object : ReadingDao by dao {
+                    fun fail(current: Int) {
+                        if (current != stage) return
+                        when (kind) {
+                            0 -> throw android.database.SQLException("injected")
+                            1 -> throw kotlinx.coroutines.CancellationException("injected")
+                            else -> throw IllegalStateException("injected")
+                        }
+                    }
+                    override suspend fun deleteReplacements() { dao.deleteReplacements(); fail(0) }
+                    override suspend fun deleteReadings() { dao.deleteReadings(); fail(1) }
+                    override suspend fun deleteInstallations() { dao.deleteInstallations(); fail(2) }
+                    override suspend fun insertInstallation(installation: InstallationEntity) {
+                        dao.insertInstallation(installation)
+                        fail(3)
+                    }
+                }
+                val subject = RoomReadingRepository(database, decorated) { "unused" }
+                val before = subject.observeReadings().first()
+                try {
+                    subject.purge()
+                    fail("Purge should fail at stage $stage")
+                } catch (error: Exception) {
+                    when (kind) {
+                        0 -> assertEquals(ReadingFailureCategory.STORAGE_ACCESS, (error as ReadingStorageException).category)
+                        1 -> assertTrue(error is kotlinx.coroutines.CancellationException)
+                        else -> assertTrue(error is IllegalStateException)
+                    }
+                }
+                val after = subject.observeReadings().first()
+                assertEquals(before.tracker, after.tracker)
+                assertEquals(before.tracker.currentInstallation, after.tracker.currentInstallation)
+                assertEquals(before.revision + 1, after.revision)
+            }
+        }
+    }
+
+    @Test
+    fun purgeRejectsMalformedStoredDataWithoutDeletingIt() = runBlocking {
+        val malformed = ReadingEntity("bad", "2026-10-01", "not-a-number")
+        database.readings().insert(malformed)
+        try {
+            repository.purge()
+            fail("Expected stored-data failure")
+        } catch (error: ReadingStorageException) {
+            assertEquals(ReadingFailureCategory.STORED_DATA, error.category)
+        }
+        assertEquals(listOf(malformed), database.readings().getAll())
+        assertEquals(listOf(InstallationEntity(ORIGINAL_INSTALLATION_ID)), database.readings().getInstallations())
+    }
+
+    @Test
     fun validatesNeighboursAndMissingTargetsWithinTransactions() = runBlocking {
         save("2026-10-01", "100")
         val last = (save("2026-10-04", "120") as SaveReadingResult.Saved).snapshot.readings.first()

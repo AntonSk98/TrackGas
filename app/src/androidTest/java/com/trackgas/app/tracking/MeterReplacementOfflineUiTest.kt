@@ -103,6 +103,7 @@ class MeterReplacementOfflineUiTest {
                     onClearDialogError = current::clearDialogError, onSave = current::save,
                     onDelete = current::delete, onOpenReplacement = current::openReplacement,
                     onReplaceMeter = current::replaceMeter,
+                    onOpenPurge = current::openPurge, onPurge = current::purge,
                 )
             }
         }

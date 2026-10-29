@@ -3,7 +3,7 @@ package com.trackgas.app.tracking
 import kotlinx.coroutines.flow.Flow
 
 enum class ReadingFailureCategory { STORAGE_ACCESS, STORED_DATA }
-enum class ReadingAction { LOAD, SAVE, DELETE, REPLACE }
+enum class ReadingAction { LOAD, SAVE, DELETE, REPLACE, PURGE }
 data class ReadingFailure(val category: ReadingFailureCategory, val action: ReadingAction)
 
 class ReadingStorageException(
@@ -84,4 +84,7 @@ interface ReadingRepository {
 
     /** Atomically revalidates the expected final reading and starts the next installation at zero. */
     suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult
+
+    /** Removes all tracking history atomically and returns the committed empty original installation. */
+    suspend fun purge(): CommittedSnapshot
 }

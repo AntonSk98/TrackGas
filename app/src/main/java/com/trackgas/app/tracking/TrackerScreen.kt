@@ -54,6 +54,8 @@ fun TrackerScreen(
     onDelete: () -> Unit,
     onOpenReplacement: () -> Unit = {},
     onReplaceMeter: () -> Unit = {},
+    onOpenPurge: () -> Unit,
+    onPurge: () -> Unit,
 ) {
     val locale = LocalConfiguration.current.locales[0]
     val ready = state.loadState == ReadingLoadState.READY
@@ -107,6 +109,19 @@ fun TrackerScreen(
                                     )
                                 },
                                 onClick = { optionsExpanded = false; onOpenReplacement() },
+                            )
+                            DropdownMenuItem(
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                                text = { Text(stringResource(R.string.purge_tracking_data), style = MaterialTheme.typography.bodyLarge) },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_purge),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                                onClick = { optionsExpanded = false; onOpenPurge() },
                             )
                         }
                     }
@@ -164,6 +179,9 @@ fun TrackerScreen(
                 onAddFinal = onOpenAdd,
                 onDismiss = onDismissDialog,
             )
+        }
+        is ReadingDialog.ConfirmingPurge -> key(state.sessionId, dialog.dialogId) {
+            PurgeTrackingDataDialog(dialog, state.loadState, onRetryLoad, onPurge, onDismissDialog)
         }
     }
 }

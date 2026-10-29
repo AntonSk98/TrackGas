@@ -15,6 +15,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -82,6 +84,8 @@ class MeterReplacementUiTest {
                         onDelete = model::delete,
                         onOpenReplacement = model::openReplacement,
                         onReplaceMeter = model::replaceMeter,
+                        onOpenPurge = model::openPurge,
+                        onPurge = model::purge,
                     )
                 }
             }
@@ -106,6 +110,11 @@ class MeterReplacementUiTest {
         options().performClick()
         rule.onNodeWithText(text(R.string.replace_meter)).performClick()
     }
+    private fun openPurge() {
+        options().performClick()
+        rule.onNodeWithText(text(R.string.purge_tracking_data)).performClick()
+    }
+    private fun confirmPurge() = rule.onNodeWithText(text(R.string.purge_all_data))
     private fun back() {
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
         rule.waitForIdle()
@@ -143,7 +152,7 @@ class MeterReplacementUiTest {
             add().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
             assertTrue(options().fetchSemanticsNode().boundsInRoot.right <= add().fetchSemanticsNode().boundsInRoot.left)
             options().performClick()
-            rule.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).assertCountEquals(1)
+            rule.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).assertCountEquals(2)
             rule.onNodeWithText(text(R.string.replace_meter)).assertIsDisplayed()
             back()
             rule.onNodeWithText(text(R.string.replace_meter)).assertDoesNotExist()
@@ -157,6 +166,95 @@ class MeterReplacementUiTest {
                 assertEquals(listOf(previous, final), repository.data.readings)
             }
         }
+    }
+
+    @Test fun purgeMenuAndCancelRoutesPreserveDataOnBothTabs() {
+        show()
+        assertEquals("Purge data", text(R.string.purge_tracking_data))
+        assertEquals("Delete all readings, meter history, and consumption? This cannot be undone.", text(R.string.purge_confirmation))
+        for (tab in listOf(TrackerTab.DASHBOARD, TrackerTab.HISTORY)) {
+            rule.onNodeWithText(text(if (tab == TrackerTab.HISTORY) R.string.history_tab else R.string.dashboard_tab)).performClick()
+            for (attempt in 0..2) {
+                openPurge()
+                rule.onNode(isPopup()).assertDoesNotExist()
+                rule.onNodeWithText(text(R.string.purge_confirmation)).assertIsDisplayed()
+                confirmPurge().assertIsDisplayed()
+                when (attempt) {
+                    0 -> rule.onNodeWithText(text(R.string.cancel)).performClick()
+                    1 -> back()
+                    else -> outside()
+                }
+                rule.onNode(isDialog()).assertDoesNotExist()
+            }
+            rule.runOnIdle {
+                assertEquals(0, repository.purgeCalls)
+                assertEquals(listOf(previous, final), repository.data.readings)
+                assertEquals(tab, tracker.state.tab)
+            }
+        }
+    }
+
+    @Test fun purgeFailureRetryPendingAndRestorationStayBoundToTheDialog() {
+        val restoration = show()
+        openPurge()
+        val originalDialog = tracker.state.dialog as ReadingDialog.ConfirmingPurge
+        rule.runOnIdle { repository.failPurge = true }
+        confirmPurge().performClick()
+        rule.onNodeWithText(text(R.string.purge_storage_error)).assertIsDisplayed()
+        rule.runOnIdle { assertEquals(listOf(previous, final), repository.data.readings) }
+        restoration.emulateSavedInstanceStateRestore()
+        rule.runOnIdle { assertEquals(originalDialog.dialogId, (tracker.state.dialog as ReadingDialog.ConfirmingPurge).dialogId) }
+        rule.runOnIdle { repository.failPurge = false; repository.purgeGate = CompletableDeferred() }
+        confirmPurge().performClick()
+        restoration.emulateSavedInstanceStateRestore()
+        confirmPurge().assertIsNotEnabled()
+        rule.onNodeWithText(text(R.string.cancel)).assertIsNotEnabled()
+        rule.onNodeWithText(text(R.string.purging_data)).assertIsDisplayed()
+        back(); outside()
+        rule.onNode(isDialog()).assertExists()
+        rule.runOnIdle {
+            tracker.purge()
+            assertEquals(2, repository.purgeCalls)
+            repository.purgeGate!!.complete(Unit)
+        }
+        rule.waitUntil { tracker.state.dialog == ReadingDialog.Closed }
+        restoration.emulateSavedInstanceStateRestore()
+        rule.onNode(isDialog()).assertDoesNotExist()
+        rule.runOnIdle { assertEquals(TrackerData(), repository.data) }
+    }
+
+    @Test fun purgeConfirmationBlocksSubmissionWhenObservationFails() {
+        show()
+        openPurge()
+        rule.runOnIdle { repository.failObservation.value = true }
+        rule.waitUntil { tracker.state.loadState == ReadingLoadState.ERROR }
+        confirmPurge().performScrollTo().assertIsNotEnabled()
+        rule.runOnIdle { assertEquals(0, repository.purgeCalls); repository.failObservation.value = false }
+        rule.onNode(hasText(text(R.string.retry)) and hasAnyAncestor(isDialog())).performScrollTo().performClick()
+        rule.waitUntil { tracker.state.loadState == ReadingLoadState.READY }
+        confirmPurge().performScrollTo().assertIsEnabled()
+        rule.runOnIdle { assertEquals(0, repository.purgeCalls) }
+    }
+
+    @Test fun purgeConfirmationRemainsReachableInLandscapeWithDoubleFont() {
+        rule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        show(doubleFont = true)
+        openPurge()
+        rule.onNodeWithText(text(R.string.purge_confirmation)).performScrollTo().assertIsDisplayed()
+        confirmPurge().performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+        rule.onNodeWithText(text(R.string.cancel)).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+        rule.runOnIdle { repository.failPurge = true }
+        confirmPurge().performScrollTo().performClick()
+        rule.onNodeWithText(text(R.string.purge_storage_error)).performScrollTo().assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+    }
+
+    @Test fun purgeConfirmationRemainsReachableWithDoubleFontOnCompactScreen() {
+        show(doubleFont = true)
+        openPurge()
+        rule.onNodeWithText(text(R.string.purge_confirmation)).performScrollTo().assertIsDisplayed()
+        confirmPurge().performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+        rule.onNodeWithText(text(R.string.cancel)).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
     }
 
     @Test fun automaticZeroNeedsNoValueAndRepeatedSameDayIsUnavailable() {
@@ -443,6 +541,9 @@ class MeterReplacementUiTest {
         private val snapshots = MutableStateFlow(CommittedSnapshot(revision, data))
         val failObservation = MutableStateFlow(false)
         var failReplacement = false
+        var failPurge = false
+        var purgeGate: CompletableDeferred<Unit>? = null
+        var purgeCalls = 0
         var observationGate: CompletableDeferred<Unit>? = null
         var gate: CompletableDeferred<Unit>? = null
         var replaceCalls = 0
@@ -471,6 +572,12 @@ class MeterReplacementUiTest {
                 DeletionValidation.MISSING -> DeleteReadingResult.Missing
                 DeletionValidation.PROTECTED -> DeleteReadingResult.Protected
             }
+        }
+        override suspend fun purge(): CommittedSnapshot {
+            purgeCalls++
+            purgeGate?.await()
+            if (failPurge) throw ReadingStorageException(IOException())
+            return publish(TrackerData())
         }
         override suspend fun save(intent: SaveReadingIntent): SaveReadingResult {
             val result = when (intent) {

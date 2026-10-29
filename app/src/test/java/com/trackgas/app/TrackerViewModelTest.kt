@@ -46,6 +46,121 @@ class TrackerViewModelTest {
         assertSame(deleting, deleting.completeSave(request, "session", null))
         assertEquals(ReadingDialog.Closed, deleting.completeDelete(request, "session", null))
         assertEquals(deleting.copy(phase = DeletePhase.Missing), deleting.completeDelete(request, "session", DeletePhase.Missing))
+        val purging = ReadingDialog.ConfirmingPurge("dialog", PurgePhase.Pending("request"))
+        for (stale in listOf(request.copy(sessionId = "old"), request.copy(dialogId = "old"), request.copy(requestId = "old"))) {
+            assertSame(purging, purging.completePurge(stale, "session", null))
+        }
+        assertSame(purging, purging.completeDelete(request, "session", null))
+        assertSame(editing, editing.completePurge(request, "session", null))
+        assertEquals(ReadingDialog.Closed, purging.completePurge(request, "session", null))
+        assertEquals(ReadingDialog.Closed, ReadingDialog.Closed.completePurge(request, "session", null))
+        val failed = PurgePhase.Failed(ReadingFailure(ReadingFailureCategory.STORAGE_ACCESS, ReadingAction.PURGE))
+        assertEquals(purging.copy(phase = failed), purging.completePurge(request, "session", failed))
+    }
+
+    @Test fun purgeRequiresReadyAndBlocksOtherActionsUntilCompletion() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        vm.openPurge()
+        vm.purge()
+        runCurrent()
+        assertEquals(ReadingDialog.Closed, vm.state.dialog)
+        assertEquals(0, repo.purges)
+        repo.deliver(TrackerData()); runCurrent()
+        vm.openPurge()
+        vm.dismissDialog()
+        assertEquals(0, repo.purges)
+        vm.openPurge()
+        vm.purge()
+        val pending = vm.state.dialog
+        assertTrue(pending.pending)
+        vm.purge(); vm.dismissDialog(); vm.openAdd(); vm.openEdit(one); vm.openDelete(one); vm.openReplacement()
+        vm.save(today, "100", Locale.US); vm.delete(); vm.replaceMeter()
+        runCurrent()
+        assertEquals(pending, vm.state.dialog)
+        assertEquals(1, repo.purges)
+        assertTrue(repo.saves.isEmpty() && repo.deletes.isEmpty() && repo.replacements.isEmpty())
+        repo.purgeOutcomes.send(Result.success(CommittedSnapshot(2, TrackerData())))
+        runCurrent()
+        assertEquals(ReadingDialog.Closed, vm.state.dialog)
+    }
+
+    @Test fun purgeSuccessAndFailurePreserveCommittedStateUntilCommit() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        val original = replaced()
+        repo.deliver(original, 1); runCurrent()
+        vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH); vm.navigate(-1)
+        val before = vm.state
+        vm.openPurge(); val opened = vm.state.dialog as ReadingDialog.ConfirmingPurge
+        vm.purge(); runCurrent()
+        assertEquals(original, vm.state.tracker)
+        assertSame(before.dashboard, vm.state.dashboard)
+        repo.purgeOutcomes.send(Result.failure(ReadingStorageException(java.io.IOException("private")))); runCurrent()
+        assertEquals(opened.copy(phase = PurgePhase.Failed(ReadingFailure(ReadingFailureCategory.STORAGE_ACCESS, ReadingAction.PURGE))), vm.state.dialog)
+        assertEquals(original, vm.state.tracker)
+        vm.purge(); runCurrent()
+        repo.purgeOutcomes.send(Result.success(CommittedSnapshot(3, TrackerData()))); runCurrent()
+        assertEquals(ReadingDialog.Closed, vm.state.dialog)
+        assertEquals(TrackerData(), vm.state.tracker)
+        assertTrue(vm.state.readings.isEmpty())
+        assertNull(vm.state.dashboard.total.cubicMetres)
+        assertEquals(before.tab, vm.state.tab); assertEquals(before.period, vm.state.period)
+        val projection = vm.state.dashboard
+        repo.deliver(original, 2); repo.deliver(TrackerData(), 4); runCurrent()
+        assertEquals(TrackerData(), vm.state.tracker)
+        assertSame(projection, vm.state.dashboard)
+        assertEquals(ReadingDialog.Closed, vm.state.dialog)
+        assertEquals(2, repo.purges)
+    }
+
+    @Test fun purgeAndObservationFailuresRemainIndependent() = runTest {
+        for (failureBefore in listOf(false, true)) {
+            val repo = ScriptedReadingRepository()
+            val vm = TrackerViewModel(repo) { today }
+            repo.deliver(listOf(one, two)); runCurrent()
+            vm.openPurge(); vm.purge(); runCurrent()
+            if (failureBefore) { repo.failObservation(); runCurrent() }
+            repo.purgeOutcomes.send(Result.success(CommittedSnapshot(3, TrackerData()))); runCurrent()
+            if (!failureBefore) { repo.failObservation(); runCurrent() }
+            assertEquals(ReadingDialog.Closed, vm.state.dialog)
+            assertEquals(ReadingLoadState.ERROR, vm.state.loadState)
+            assertEquals(TrackerData(), vm.state.tracker)
+            vm.retryLoad(); runCurrent()
+            repo.deliver(TrackerData(), 4); runCurrent()
+            assertEquals(ReadingLoadState.READY, vm.state.loadState)
+            assertEquals(1, repo.purges)
+        }
+    }
+
+    @Test fun loadRetryRetainsFailedPurgeAndRequiresExplicitRetry() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        repo.deliver(listOf(one)); runCurrent()
+        vm.openPurge(); vm.purge(); runCurrent()
+        repo.failObservation(); runCurrent()
+        repo.purgeOutcomes.send(Result.failure(ReadingStorageException(java.io.IOException()))); runCurrent()
+        val failed = vm.state.dialog
+        assertTrue((failed as ReadingDialog.ConfirmingPurge).phase is PurgePhase.Failed)
+        assertEquals(listOf(one), vm.state.readings)
+        vm.purge(); runCurrent()
+        assertEquals(1, repo.purges)
+        vm.retryLoad(); runCurrent()
+        repo.deliver(listOf(one), 2); runCurrent()
+        assertEquals(failed, vm.state.dialog)
+        assertEquals(1, repo.purges)
+        vm.purge(); runCurrent()
+        assertEquals(2, repo.purges)
+    }
+
+    @Test fun loadErrorBlocksOpeningPurge() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        repo.deliver(TrackerData()); runCurrent()
+        repo.failObservation(); runCurrent()
+        vm.openPurge(); vm.purge(); runCurrent()
+        assertEquals(ReadingDialog.Closed, vm.state.dialog)
+        assertEquals(0, repo.purges)
     }
 
     @Test fun loadingBlocksOpeningAndSubmissionUntilAnExplicitSnapshot() = runTest {
@@ -625,9 +740,11 @@ private class ScriptedReadingRepository : ReadingRepository {
     val saveOutcomes = Channel<Result<SaveReadingResult>>(Channel.UNLIMITED)
     val deleteOutcomes = Channel<Result<DeleteReadingResult>>(Channel.UNLIMITED)
     val replacementOutcomes = Channel<Result<ReplaceMeterResult>>(Channel.UNLIMITED)
+    val purgeOutcomes = Channel<Result<CommittedSnapshot>>(Channel.UNLIMITED)
     val saves = mutableListOf<SaveReadingIntent>()
     val deletes = mutableListOf<String>()
     val replacements = mutableListOf<ReplaceMeterIntent>()
+    var purges = 0
     var subscriptions = 0
 
     suspend fun deliver(readings: List<Reading>, revision: Long = 1) = observations.send(Result.success(CommittedSnapshot(revision, readings)))
@@ -653,5 +770,10 @@ private class ScriptedReadingRepository : ReadingRepository {
     override suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult {
         replacements += intent
         return replacementOutcomes.receive().getOrThrow()
+    }
+
+    override suspend fun purge(): CommittedSnapshot {
+        purges++
+        return purgeOutcomes.receive().getOrThrow()
     }
 }

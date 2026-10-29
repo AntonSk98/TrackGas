@@ -20,6 +20,40 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ReadingPersistenceTest {
+    @Test fun purgedTrackerReopensEmptyAndSupportsNewUsageAndReplacement() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "purge-${UUID.randomUUID()}.db"
+        fun open() = Room.databaseBuilder(context, ReadingDatabase::class.java, name)
+            .addMigrations(ReadingDatabase.MIGRATION_1_2).addCallback(ReadingDatabase.INITIALIZE).build()
+        var database = open()
+        try {
+            var repository = RoomReadingRepository(database)
+            val date = LocalDate.parse("2026-10-28")
+            suspend fun add(day: LocalDate, value: String) =
+                repository.save(SaveReadingIntent.Add(day, parseMeter(value, Locale.US), date.plusDays(2))) as SaveReadingResult.Saved
+            add(date.minusDays(1), "100")
+            add(date, "110")
+            repository.replaceMeter(ReplaceMeterIntent(replacementTarget(repository.observeReadings().first().tracker, date), date))
+            assertEquals(1, repository.observeReadings().first().tracker.replacements.size)
+            repository.purge()
+            database.close()
+            database = open()
+            repository = RoomReadingRepository(database)
+            assertEquals(TrackerData(), repository.observeReadings().first().tracker)
+            val baseline = add(date, "1").snapshot.tracker
+            assertTrue(readingIntervals(baseline).isEmpty())
+            val nextDate = date.plusDays(1)
+            val next = add(nextDate, "4").snapshot.tracker
+            assertEquals("3", readingIntervals(next).single().cubicMetres.toString())
+            val replacement = repository.replaceMeter(ReplaceMeterIntent(replacementTarget(next, nextDate), nextDate))
+            assertTrue(replacement is ReplaceMeterResult.Replaced)
+            assertEquals(1, (replacement as ReplaceMeterResult.Replaced).snapshot.tracker.replacements.size)
+        } finally {
+            database.close()
+            context.deleteDatabase(name)
+        }
+    }
+
     @Test fun replacementHistoryAndConsumptionSurviveOfflineReopenAndEndpointCorrections() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "replacement-${UUID.randomUUID()}.db"
