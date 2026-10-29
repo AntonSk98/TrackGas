@@ -49,7 +49,12 @@ that current date; existing readings and manual navigation are not changed autom
 Tap a History entry to edit its meter value; its original date is read-only in a
 field labelled **Date**. Long-press an entry to request deletion, then confirm or
 cancel. There are no separate Edit/Delete icons; both entry actions have accessible
-labels identifying the reading. Add uses the same outlined **Date** field; tap it
+labels identifying the reading. After replacement, History identifies each meter
+and its initial/final readings; same-day new-meter initial readings appear first.
+These structural endpoints can be edited but cannot be deleted individually;
+long-press explains their protection instead of offering destructive confirmation.
+Ordinary entries retain the usual delete confirmation.
+Add uses the same outlined **Date** field; tap it
 to select a date. Tap outside
 the Add/Edit form, use Back, or choose Cancel to discard an unsaved draft,
 except while a save is pending. Pending saves and deletions disable dismissal,
@@ -60,6 +65,21 @@ available date to clear the error; editing a reading on its own date is allowed.
 Save still validates the complete draft and opens the picker if its date is a
 duplicate, without saving or losing your input.
 
+The **Tracker options** gear immediately left of Add on either tab offers only
+**Replace meter**. First save today's final old-meter reading through Add (or
+correct it in History). Open Replace meter to review today's read-only date and
+the saved final value, then choose **Confirm replacement**. There is no new-meter
+value to enter: confirmation automatically starts the new meter at zero on that
+date. A missing-final
+explanation offers ordinary Add; saving there never automatically replaces a meter.
+Cancel, Back, or tapping outside closes a non-pending replacement confirmation without
+changing the saved final reading. Pending replacement blocks dismissal and repeat
+submission; storage failures retain the confirmation for retry.
+Replacement is today-only, once per calendar day, and cannot be undone. If the
+date or saved final reading changes, review the latest readings and reopen the form.
+Ordinary Add resolves historical dates to the meter covering that date and cannot
+add another reading on a replacement date.
+
 Weekly/Monthly/Yearly stays above the consumption card. Previous/next arrows and
 the centred date range sit directly below the chart inside that card, before the
 numeric list. Empty periods keep the same navigation below their message.
@@ -67,9 +87,11 @@ numeric list. Empty periods keep the same navigation below their message.
 ## Local readings
 
 Readings are stored in an app-private database on the device and survive app
-process termination and restart. There is no account, server, or cloud backup;
-uninstalling the app or clearing its data removes the readings. Android backup
-is disabled, but this is not a guarantee against device-vendor transfers or
+process termination and restart. Meter installations and their replacement
+boundaries are stored durably with the readings. Upgrades preserve existing reading identities, dates, and exact
+decimal values in the original meter installation. There is no account, server,
+or cloud backup; uninstalling the app or clearing its data removes the readings.
+Android backup is disabled, but this is not a guarantee against device-vendor transfers or
 access on a compromised device. The selected tab and period survive rotation,
 but a fresh process opens Dashboard for the current Monday-to-Sunday week.
 Loading and storage errors are shown with retry; failed saves retain their draft
@@ -77,10 +99,31 @@ and failed deletions retain their confirmation. Drafts are not durable records.
 
 ## How consumption is calculated
 
-Readings are paired chronologically, regardless of entry order. An interval covers
-the days **after** its first reading through its last reading, inclusive: `(A, B]`.
-A single reading establishes only a baseline. Days outside measured intervals are
-unknown, not zero, and an uncovered period has no consumption series or total.
+Readings are paired chronologically **within each meter installation**, regardless
+of entry order. Values from different meters are never subtracted. An interval
+covers the days **after** its first reading through its last reading, inclusive:
+`(A, B]`. A single reading establishes only a baseline. Days outside measured
+intervals are unknown, not zero, and an uncovered period has no consumption series
+or total.
+
+On replacement day, the old meter's final reading closes its last interval, and
+the new meter automatically starts at zero as a separate baseline.
+For example:
+
+| Date | Old meter | New meter | Daily consumption |
+| --- | --- | --- | --- |
+| October 27, 2026 | 1100 | — | Baseline only |
+| October 28, 2026 | Final 1105 | Initial 0 | 5 m³ |
+| October 29, 2026 | — | 3 | 3 m³ |
+
+The covered total is exactly **8 m³**, with no interval between 1105 and 0.
+No new-meter value is requested on replacement day. If the first reading on the
+following day is 5, that day's consumption is exactly **5 - 0 = 5 m³**. Existing
+stored or subsequently edited baselines retain their values: a baseline corrected
+to 10 followed by 13 gives 3 m³, not 13. A new baseline alone adds neither consumption nor a
+known-zero day. Under `(A, B]`, old-meter usage ends on replacement day and
+new-meter usage starts on the following day. This calendar-day model does not
+divide usage within replacement day or promise sub-day accuracy.
 
 The difference between two meter values is the measured interval total. For gaps,
 that total is distributed uniformly across calendar days; this daily distribution
@@ -88,8 +131,9 @@ is **estimated**, not a measurement of actual daily variation. For example, 1000
 on October 1 and 1012 on October 4 allocate an estimated 4 m³ to October 2, 3, and 4.
 No reading or usage is invented for October 5.
 
-Totals use overlap with all original intervals, including readings outside the
-selected period. Readings of 1000 on January 30, 2026 and 1030 on March 1 allocate
+Totals use overlap with all original installation-local intervals, including
+readings outside the selected period and usage from successive meters.
+Readings of 1000 on January 30, 2026 and 1030 on March 1 in the same installation allocate
 28 m³ to February. Period totals include consumption for covered days only;
 uncovered days are not counted as zero or extrapolated. Coverage and estimate
 metadata are retained internally, not displayed on the dashboard.

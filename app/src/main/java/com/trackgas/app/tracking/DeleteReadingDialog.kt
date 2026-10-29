@@ -27,12 +27,14 @@ internal fun DeleteReadingDialog(
     onDismiss: () -> Unit,
 ) {
     val pending = dialog.pending
+    val protected = dialog.phase == DeletePhase.Protected
     AlertDialog(
         onDismissRequest = { if (!pending) onDismiss() },
         title = { Text(stringResource(R.string.delete_reading)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(
+                if (protected) Text(stringResource(R.string.protected_reading))
+                else Text(stringResource(
                     R.string.delete_confirmation,
                     stringResource(R.string.volume, numberText(dialog.reading.cubicMetres, locale, raw = true)),
                     dateText(dialog.reading.date, locale),
@@ -49,7 +51,7 @@ internal fun DeleteReadingDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            if (!protected) TextButton(
                 enabled = !pending && loadState == ReadingLoadState.READY,
                 onClick = onConfirm,
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),

@@ -15,6 +15,7 @@ import java.time.temporal.ChronoUnit
  */
 data class ReadingInterval(val earlier: Reading, val later: Reading) {
     init {
+        require(earlier.installationId == later.installationId) { "Interval readings must belong to the same installation" }
         readingCollectionViolation(listOf(earlier, later))?.let {
             throw IllegalArgumentException("Invalid reading collection: $it")
         }
@@ -29,16 +30,37 @@ data class ReadingInterval(val earlier: Reading, val later: Reading) {
 }
 
 /**
- * Pairs actual readings chronologically, regardless of entry order, without modifying them.
+ * Pairs actual readings within each installation, regardless of entry order.
  *
- * Rejects duplicate identities/dates and decreasing cumulative values.
+ * Rejects duplicate identities/installation dates, decreasing values, and overlapping coverage.
  * Empty input and a lone baseline produce no intervals.
  */
 fun readingIntervals(readings: List<Reading>): List<ReadingInterval> {
     readingCollectionViolation(readings)?.let {
         throw IllegalArgumentException("Invalid reading collection: $it")
     }
-    return readings.sortedBy { it.date }.zipWithNext { earlier, later -> ReadingInterval(earlier, later) }
+    return readings.groupBy { it.installationId }.values
+        .flatMap { installation ->
+            installation.sortedBy { it.date }.zipWithNext { earlier, later -> ReadingInterval(earlier, later) }
+        }
+        .sortedBy { it.firstCoveredDate }
+        .also(::requireNonOverlapping)
+}
+
+/** Validates the complete replacement chain before projecting installation-local usage. */
+fun readingIntervals(tracker: TrackerData): List<ReadingInterval> {
+    readingCollectionViolation(tracker)?.let {
+        throw IllegalArgumentException("Invalid reading collection: $it")
+    }
+    return readingIntervals(tracker.readings)
+}
+
+private fun requireNonOverlapping(intervals: List<ReadingInterval>) {
+    for (index in 1 until intervals.size) {
+        require(intervals[index - 1].lastCoveredDate < intervals[index].firstCoveredDate) {
+            "Allocation intervals must be chronologically ordered and non-overlapping"
+        }
+    }
 }
 
 /** Inclusive calendar-day range used for both selected periods and individual buckets. */
@@ -86,11 +108,7 @@ data class ConsumptionAmount(
  * Work scales with the number of intervals, not the number of skipped days.
  */
 fun allocate(intervals: List<ReadingInterval>, range: DateRange): ConsumptionAmount {
-    for (index in 1 until intervals.size) {
-        require(intervals[index - 1].lastCoveredDate < intervals[index].firstCoveredDate) {
-            "Allocation intervals must be chronologically ordered and non-overlapping"
-        }
-    }
+    requireNonOverlapping(intervals)
     var total = BigDecimal.ZERO
     var coveredDays = 0L
     var estimated = false
@@ -131,8 +149,13 @@ data class Dashboard(
  * buckets are omitted, while known zero and estimated allocations remain visible.
  * No overlapping interval means a null total and an empty list of rows.
  */
-fun dashboard(readings: List<Reading>, period: CalendarPeriod): Dashboard {
-    val intervals = readingIntervals(readings)
+fun dashboard(readings: List<Reading>, period: CalendarPeriod): Dashboard =
+    dashboardFromIntervals(readingIntervals(readings), period)
+
+fun dashboard(tracker: TrackerData, period: CalendarPeriod): Dashboard =
+    dashboardFromIntervals(readingIntervals(tracker), period)
+
+private fun dashboardFromIntervals(intervals: List<ReadingInterval>, period: CalendarPeriod): Dashboard {
     val total = allocate(intervals, period.range)
     return Dashboard(
         total,

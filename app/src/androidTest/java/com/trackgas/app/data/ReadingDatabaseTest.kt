@@ -24,7 +24,7 @@ class ReadingDatabaseTest {
         database = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
             ReadingDatabase::class.java,
-        ).build()
+        ).addCallback(ReadingDatabase.INITIALIZE).build()
     }
 
     @After
@@ -53,5 +53,27 @@ class ReadingDatabaseTest {
         } catch (_: SQLiteConstraintException) {
             assertEquals(listOf("one"), dao.getAll().map { it.id })
         }
+    }
+
+    @Test
+    fun installationDatesAndRestrictiveReferencesAreEnforced() = runBlocking {
+        val dao = database.readings()
+        assertEquals(listOf(InstallationEntity("original")), dao.getInstallations())
+        dao.insertInstallation(InstallationEntity("next", "2026-01-01"))
+        dao.insert(ReadingEntity("final", "2026-01-01", "1105"))
+        dao.insert(ReadingEntity("initial", "2026-01-01", "0.0000", "next"))
+        dao.insertReplacement(ReplacementEntity("replacement", "2026-01-01", "original", "next", "final", "initial"))
+        assertEquals(2, dao.getAll().size)
+        for (operation in listOf<suspend () -> Unit>(
+            { dao.insert(ReadingEntity("duplicate", "2026-01-01", "1", "next")) },
+            { dao.insert(ReadingEntity("orphan", "2026-01-02", "1", "absent")) },
+            { dao.delete("final") },
+            { dao.delete("initial") },
+            { database.openHelper.writableDatabase.execSQL("DELETE FROM installations WHERE id = 'next'") },
+            { dao.insertReplacement(ReplacementEntity("duplicate", "2026-01-01", "original", "next", "final", "initial")) },
+        )) {
+            try { operation(); fail("Expected restrictive constraint") } catch (_: SQLiteConstraintException) { }
+        }
+        assertEquals(2, dao.getAll().size)
     }
 }

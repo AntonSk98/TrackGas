@@ -10,7 +10,10 @@ class TrackGasApplication : Application() {
     val trackerStoreOwner = TrackerStoreOwner()
 
     private val database by lazy {
-        Room.databaseBuilder(this, ReadingDatabase::class.java, "readings.db").build()
+        Room.databaseBuilder(this, ReadingDatabase::class.java, "readings.db")
+            .addMigrations(ReadingDatabase.MIGRATION_1_2)
+            .addCallback(ReadingDatabase.INITIALIZE)
+            .build()
     }
     val readingRepository: ReadingRepository by lazy { RoomReadingRepository(database) }
 }

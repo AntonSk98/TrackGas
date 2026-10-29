@@ -122,4 +122,100 @@ class ConsumptionTest {
         }
         assertNull(ConsumptionAmount(null, 0, 7, false).cubicMetres)
     }
+
+    private fun replacementTracker(baseline: String = "0", next: String? = "3"): TrackerData {
+        val final = reading(28, "1105")
+        val initial = reading(28, baseline).copy(id = "new-initial", installationId = "new")
+        return TrackerData(
+            listOf(reading(27, "1100"), final, initial) +
+                listOfNotNull(next?.let { reading(29, it).copy(id = "new-next", installationId = "new") }),
+            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", initial.date)),
+            listOf(MeterReplacement("replacement", final.date, ORIGINAL_INSTALLATION_ID, "new", final.id, initial.id)),
+        )
+    }
+
+    @Test fun replacementExampleAttributesFiveAndThreeToTheCorrectDaysWithExactTotalEight() {
+        for ((baseline, next) in listOf("0" to "3", "10.0000" to "13.0000", "1200.0000" to "1203.0000")) {
+            val source = replacementTracker(baseline, next)
+            val shuffled = source.copy(readings = source.readings.reversed(), installations = source.installations.reversed())
+            val intervals = readingIntervals(shuffled)
+            assertEquals(2, intervals.size)
+            assertEquals(listOf(28, 29), intervals.map { it.lastCoveredDate.dayOfMonth })
+            assertTrue(intervals.all { it.earlier.installationId == it.later.installationId })
+            for ((day, expected) in listOf(28 to "5", 29 to "3")) {
+                val date = reading(day, "0").date
+                val amount = allocate(intervals, DateRange(date, date))
+                assertEquals(0, BigDecimal(expected).compareTo(amount.cubicMetres))
+                assertEquals(1L, amount.coveredDays)
+                assertFalse(amount.estimatedDistribution)
+            }
+            val total = allocate(intervals, DateRange(reading(27, "0").date, reading(29, "0").date))
+            assertEquals(0, BigDecimal("8").compareTo(total.cubicMetres))
+            assertEquals(2L, total.coveredDays)
+            assertEquals(readingIntervals(source.readings), intervals)
+            assertEquals(source.readings.reversed(), shuffled.readings)
+            if (baseline.contains('.')) assertEquals(BigDecimal("3.0000"), intervals.last().cubicMetres)
+        }
+    }
+
+    @Test fun newBaselineAloneNeverCreatesAnIntervalOrKnownZeroDay() {
+        for (baseline in listOf("0", "12.5000")) {
+            val intervals = readingIntervals(replacementTracker(baseline, null))
+            assertEquals(1, intervals.size)
+            assertEquals(BigDecimal("5"), intervals.single().cubicMetres)
+            val after = reading(29, "0").date
+            assertNull(allocate(intervals, DateRange(after, after)).cubicMetres)
+        }
+        assertTrue(readingIntervals(TrackerData()).isEmpty())
+        assertTrue(readingIntervals(TrackerData(listOf(reading(27, "1100")))).isEmpty())
+    }
+
+    @Test fun multipleReplacementsMergeChronologicallyWithoutCrossMeterPairs() {
+        val first = replacementTracker("10", "13")
+        val secondFinal = first.readings.single { it.id == "new-next" }
+        val secondInitial = reading(29, "100.0000").copy(id = "third-initial", installationId = "third")
+        val last = reading(31, "104.1250").copy(id = "third-last", installationId = "third")
+        val tracker = first.copy(
+            readings = (first.readings + secondInitial + last).reversed(),
+            installations = first.installations + MeterInstallation("third", secondInitial.date),
+            replacements = (first.replacements + MeterReplacement(
+                "second", secondFinal.date, "new", "third", secondFinal.id, secondInitial.id,
+            )).reversed(),
+        )
+        val intervals = readingIntervals(tracker)
+        assertEquals(listOf(28, 29, 31), intervals.map { it.lastCoveredDate.dayOfMonth })
+        val total = allocate(intervals, DateRange(reading(27, "0").date, last.date))
+        assertEquals(BigDecimal("12.1250"), total.cubicMetres)
+        assertEquals(4L, total.coveredDays)
+        assertTrue(total.estimatedDistribution)
+        for (day in 30..31) {
+            val date = reading(day, "0").date
+            assertEquals(BigDecimal("2.0625"), allocate(intervals, DateRange(date, date)).cubicMetres)
+        }
+    }
+
+    @Test fun mixedPairsOverlappingInstallationsAndInvalidTrackerStructureAreRejected() {
+        val tracker = replacementTracker()
+        val final = tracker.readings.single { it.id == "id-28" }
+        val initial = tracker.readings.single { it.id == "new-initial" }
+        assertThrows(IllegalArgumentException::class.java) { ReadingInterval(final, initial) }
+        assertThrows(IllegalArgumentException::class.java) {
+            ReadingInterval(final, initial.copy(date = final.date.plusDays(1), cubicMetres = BigDecimal("1200")))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            readingIntervals(listOf(reading(27, "1100"), final, initial.copy(date = reading(27, "0").date),
+                reading(29, "3").copy(id = "overlap", installationId = "new")))
+        }
+        for (invalid in listOf(
+            tracker.copy(replacements = emptyList()),
+            tracker.copy(installations = listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID))),
+            tracker.copy(readings = tracker.readings.filterNot { it.id == initial.id }),
+            tracker.copy(readings = tracker.readings + reading(30, "1106")),
+        )) {
+            assertThrows(IllegalArgumentException::class.java) { readingIntervals(invalid) }
+            assertThrows(IllegalArgumentException::class.java) {
+                dashboard(invalid, CalendarPeriod(PeriodType.MONTH, LocalDate.of(2026, 1, 1)))
+            }
+        }
+    }
 }

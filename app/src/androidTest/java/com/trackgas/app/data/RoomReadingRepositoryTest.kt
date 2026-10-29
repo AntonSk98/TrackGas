@@ -10,6 +10,7 @@ import com.trackgas.app.tracking.ReadingFailureCategory
 import com.trackgas.app.tracking.SaveReadingResult
 import com.trackgas.app.tracking.SaveReadingIntent
 import com.trackgas.app.tracking.parseMeter
+import com.trackgas.app.tracking.*
 import java.time.LocalDate
 import java.util.Locale
 import kotlinx.coroutines.async
@@ -32,7 +33,7 @@ class RoomReadingRepositoryTest {
     fun setUp() {
         database = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(), ReadingDatabase::class.java,
-        ).build()
+        ).addCallback(ReadingDatabase.INITIALIZE).build()
         repository = RoomReadingRepository(database)
     }
 
@@ -216,5 +217,143 @@ class RoomReadingRepositoryTest {
         val failure = classifyReadingFailure(sql) as ReadingStorageException
         assertSame(sql, failure.cause)
         assertEquals(ReadingFailureCategory.STORAGE_ACCESS, failure.category)
+    }
+
+    private suspend fun replacementIntent(): ReplaceMeterIntent =
+        ReplaceMeterIntent(replacementTarget(repository.observeReadings().first().tracker, today), today)
+
+    @Test fun replacementCommitsAllCollectionsWithAutomaticZeroAndProtectedEndpoints() = runBlocking {
+        save("2026-10-25", "1100.0000")
+        val final = (save("2026-10-26", "1105.0000") as SaveReadingResult.Saved).snapshot.readings.first()
+        val intent = replacementIntent()
+        val result = repository.replaceMeter(intent) as ReplaceMeterResult.Replaced
+        val tracker = result.snapshot.tracker
+        assertEquals(2, tracker.installations.size)
+        assertEquals(1, tracker.replacements.size)
+        assertEquals(3, tracker.readings.size)
+        val boundary = tracker.replacements.single()
+        assertEquals(final.id, boundary.finalReadingId)
+        val initial = tracker.readings.single { it.id == boundary.initialReadingId }
+        assertEquals("0", initial.cubicMetres.toString())
+        assertEquals("1105.0000", tracker.readings.single { it.id == final.id }.cubicMetres.toString())
+        assertEquals(tracker.currentInstallation.id, initial.installationId)
+        assertEquals(today, initial.date)
+        assertEquals(ReplacementError.OBSOLETE_TARGET, (repository.replaceMeter(intent) as ReplaceMeterResult.Rejected).error)
+        val repeated = replacementIntent()
+        assertEquals(ReplacementError.ALREADY_REPLACED, (repository.replaceMeter(repeated) as ReplaceMeterResult.Rejected).error)
+        for (id in listOf(final.id, initial.id)) assertEquals(DeleteReadingResult.Protected, repository.delete(id))
+        assertEquals(tracker, repository.observeReadings().first().tracker)
+        assertTrue(result.snapshot.revision < repository.observeReadings().first().revision)
+    }
+
+    @Test fun replacementRejectsMissingChangedDeletedAndStaleFinalTargetsWithoutWrites() = runBlocking {
+        assertEquals(ReplacementError.MISSING_FINAL, (repository.replaceMeter(replacementIntent()) as ReplaceMeterResult.Rejected).error)
+        val final = (save("2026-10-26", "1105") as SaveReadingResult.Saved).snapshot.readings.single()
+        val original = replacementIntent()
+        assertEquals(ReplacementError.STALE_DATE, (repository.replaceMeter(original.copy(today = today.plusDays(1))) as ReplaceMeterResult.Rejected).error)
+        save("2026-10-26", "1106", final.id)
+        assertEquals(ReplacementError.OBSOLETE_TARGET, (repository.replaceMeter(original) as ReplaceMeterResult.Rejected).error)
+        val changed = replacementIntent()
+        repository.delete(final.id)
+        assertEquals(ReplacementError.OBSOLETE_TARGET, (repository.replaceMeter(changed) as ReplaceMeterResult.Rejected).error)
+        val tracker = repository.observeReadings().first().tracker
+        assertEquals(1, tracker.installations.size)
+        assertTrue(tracker.replacements.isEmpty())
+        assertTrue(tracker.readings.isEmpty())
+    }
+
+    @Test fun automaticZeroOnLaterReplacementDoesNotResetStoredNonzeroBaseline() = runBlocking {
+        save("2026-10-26", "1105.0000")
+        val first = (repository.replaceMeter(replacementIntent()) as ReplaceMeterResult.Replaced).snapshot.tracker
+        val baselineId = first.replacements.single().initialReadingId
+        repository.save(SaveReadingIntent.Edit(baselineId, parseMeter("12.5000", Locale.US), today))
+        val tomorrow = today.plusDays(1)
+        repository.save(SaveReadingIntent.Add(tomorrow, parseMeter("18.2500", Locale.US), tomorrow))
+        val before = repository.observeReadings().first().tracker
+        val next = (repository.replaceMeter(ReplaceMeterIntent(replacementTarget(before, tomorrow), tomorrow))
+            as ReplaceMeterResult.Replaced).snapshot.tracker
+        assertEquals("12.5000", next.readings.single { it.id == baselineId }.cubicMetres.toPlainString())
+        val newBaselineId = next.replacements.last().initialReadingId
+        assertEquals("0", next.readings.single { it.id == newBaselineId }.cubicMetres.toPlainString())
+        assertEquals(before.readings, next.readings.filterNot { it.id == newBaselineId })
+        assertEquals(next, RoomReadingRepository(database).observeReadings().first().tracker)
+    }
+
+    @Test fun failureAtEachReplacementWriteRollsBackAllTablesAndDoesNotIssueRevision() = runBlocking {
+        save("2026-10-26", "1105.0000")
+        for (table in listOf("installations", "readings", "replacements")) {
+            val intent = replacementIntent()
+            val before = repository.observeReadings().first()
+            val sql = database.openHelper.writableDatabase
+            sql.execSQL("CREATE TRIGGER reject_replacement BEFORE INSERT ON $table BEGIN SELECT RAISE(ABORT, 'rejected'); END")
+            try {
+                repository.replaceMeter(intent)
+                fail("Expected replacement write failure")
+            } catch (error: ReadingStorageException) {
+                assertEquals(ReadingFailureCategory.STORAGE_ACCESS, error.category)
+            } finally { sql.execSQL("DROP TRIGGER reject_replacement") }
+            val after = repository.observeReadings().first()
+            assertEquals(before.tracker, after.tracker)
+            assertEquals(before.revision + 1, after.revision)
+        }
+    }
+
+    @Test fun invalidMetadataAndEndpointsFailEveryBoundaryWithoutRepairOrRevision() = runBlocking {
+        save("2026-10-26", "1105")
+        repository.replaceMeter(replacementIntent())
+        val valid = repository.observeReadings().first().tracker
+        val boundary = valid.replacements.single()
+        val sql = database.openHelper.writableDatabase
+        val corruptions = listOf(
+            "UPDATE readings SET installationId = '' WHERE id = '${boundary.initialReadingId}'" to
+                "UPDATE readings SET installationId = '${boundary.newInstallationId}' WHERE id = '${boundary.initialReadingId}'",
+            "UPDATE readings SET installationId = 'absent' WHERE id = '${boundary.initialReadingId}'" to
+                "UPDATE readings SET installationId = '${boundary.newInstallationId}' WHERE id = '${boundary.initialReadingId}'",
+            "UPDATE installations SET id = '' WHERE id = '${boundary.newInstallationId}'" to
+                "UPDATE installations SET id = '${boundary.newInstallationId}' WHERE id = ''",
+            "UPDATE installations SET startDate = 'not-a-date' WHERE id = '${boundary.newInstallationId}'" to
+                "UPDATE installations SET startDate = '$today' WHERE id = '${boundary.newInstallationId}'",
+            "UPDATE replacements SET id = ''" to "UPDATE replacements SET id = '${boundary.id}'",
+            "UPDATE replacements SET date = 'not-a-date'" to "UPDATE replacements SET date = '$today'",
+            "UPDATE replacements SET date = '2026-10-25'" to "UPDATE replacements SET date = '$today'",
+            "UPDATE replacements SET finalReadingId = 'missing'" to
+                "UPDATE replacements SET finalReadingId = '${boundary.finalReadingId}'",
+            "UPDATE replacements SET finalReadingId = '${boundary.initialReadingId}'" to
+                "UPDATE replacements SET finalReadingId = '${boundary.finalReadingId}'",
+            "INSERT INTO installations (id, startDate) VALUES ('disconnected', '2026-10-27')" to
+                "DELETE FROM installations WHERE id = 'disconnected'",
+        )
+        for ((corrupt, repair) in corruptions) {
+            sql.execSQL("PRAGMA foreign_keys=OFF")
+            sql.execSQL(corrupt)
+            sql.execSQL("PRAGMA foreign_keys=ON")
+            val beforeRows = database.readings().getAll()
+            val beforeInstallations = database.readings().getInstallations()
+            val beforeReplacements = database.readings().getReplacements()
+            val brokenRepository = RoomReadingRepository(database)
+            repeat(2) {
+                for (operation in listOf<suspend () -> Unit>(
+                    { brokenRepository.observeReadings().first() },
+                    { brokenRepository.save(SaveReadingIntent.Add(today.plusDays(1), parseMeter("3", Locale.US), today.plusDays(1))) },
+                    { brokenRepository.delete(boundary.finalReadingId) },
+                    { brokenRepository.replaceMeter(ReplaceMeterIntent(replacementTarget(valid, today), today)) },
+                )) {
+                    try { operation(); fail("Expected stored-data failure") } catch (error: ReadingStorageException) {
+                        assertEquals(ReadingFailureCategory.STORED_DATA, error.category)
+                        assertEquals("Reading storage failed", error.message)
+                        assertTrue(error.cause is StoredReadingDecodingException)
+                    }
+                    assertEquals(beforeRows, database.readings().getAll())
+                    assertEquals(beforeInstallations, database.readings().getInstallations())
+                    assertEquals(beforeReplacements, database.readings().getReplacements())
+                }
+            }
+            sql.execSQL("PRAGMA foreign_keys=OFF")
+            sql.execSQL(repair)
+            sql.execSQL("PRAGMA foreign_keys=ON")
+            val restored = brokenRepository.observeReadings().first()
+            assertEquals(1L, restored.revision)
+            assertEquals(valid, restored.tracker)
+        }
     }
 }

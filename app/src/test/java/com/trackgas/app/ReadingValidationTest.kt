@@ -85,4 +85,23 @@ class ReadingValidationTest {
         val rejected = ReadingValidation.Rejected(ReadingErrors(value = ReadingError.INVALID_NUMBER))
         assertThrows(IllegalArgumentException::class.java) { rejected.copy(errors = ReadingErrors()) }
     }
+
+    @Test fun replacementPickerAndFinalSaveResolveHistoricalDatesAndExcludeCounterpartOnEdit() {
+        val final = readings.last()
+        val baseline = Reading("baseline", final.date, BigDecimal("0"), "new")
+        val tracker = TrackerData(
+            readings + baseline,
+            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", final.date)),
+            listOf(MeterReplacement("boundary", final.date, ORIGINAL_INSTALLATION_ID, "new", final.id, baseline.id)),
+        )
+        for (date in listOf(final.date, today, today.minusDays(2))) {
+            val result = evaluateSave(tracker, SaveReadingIntent.Add(date, ParsedMeter.Required, today), "added") as ReadingValidation.Rejected
+            assertEquals(result.errors.date, validateReadingDate(tracker, null, date, today))
+        }
+        assertEquals(ReadingError.DUPLICATE_DATE, validateReadingDate(tracker, null, final.date, today))
+        assertNull(validateReadingDate(tracker, baseline.id, final.date, today))
+        assertNull(validateReadingDate(tracker, final.id, final.date, today))
+        assertEquals(ORIGINAL_INSTALLATION_ID, installationForDate(tracker, today.minusDays(2))?.id)
+        assertEquals("new", installationForDate(tracker, today)?.id)
+    }
 }

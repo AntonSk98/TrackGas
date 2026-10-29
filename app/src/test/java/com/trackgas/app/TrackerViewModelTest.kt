@@ -458,6 +458,165 @@ class TrackerViewModelTest {
         assertEquals(pending, vm.state.dialog)
         assertTrue(vm.state.dialog.pending)
     }
+
+    @Test fun replacementCompletionRequiresMatchingSessionDialogAndRequest() {
+        val request = ReadingRequest("session", "dialog", "request")
+        val dialog = ReadingDialog.Replacing("dialog", replacementTarget(TrackerData(listOf(two)), today), ReplacementPhase.Pending("request"))
+        assertEquals(ReadingDialog.Closed, dialog.completeReplacement(request, "session", null))
+        for (stale in listOf(request.copy(sessionId = "old"), request.copy(dialogId = "old"), request.copy(requestId = "old"))) {
+            assertSame(dialog, dialog.completeReplacement(stale, "session", ReplacementPhase.Unavailable(ReplacementError.OBSOLETE_TARGET)))
+        }
+        assertSame(dialog, dialog.completeSave(request, "session", null))
+        assertSame(dialog, dialog.completeDelete(request, "session", null))
+        val editing = ReadingDialog.Editing("dialog", ReadingTarget.Add(today), SavePhase.Pending("request"))
+        assertSame(editing, editing.completeReplacement(request, "session", null))
+    }
+
+    private fun replaced(): TrackerData =
+        (evaluateReplacement(TrackerData(listOf(one, two)), ReplaceMeterIntent(
+            replacementTarget(TrackerData(listOf(one, two)), today), today,
+        ), "new", "baseline", "replacement") as ReplacementValidation.Accepted).tracker
+
+    @Test fun pendingReplacementLocksEveryMutationAndUsesSubmissionDateWithoutRetargeting() = runTest {
+        val repo = ScriptedReadingRepository()
+        var date = today
+        val vm = TrackerViewModel(repo) { date }
+        vm.openReplacement()
+        assertEquals(ReadingDialog.Closed, vm.state.dialog)
+        repo.deliver(listOf(one, two)); runCurrent()
+        vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH)
+        val before = vm.state
+        vm.openReplacement()
+        val opened = vm.state.dialog as ReadingDialog.Replacing
+        assertEquals(two, opened.target.finalReading)
+        assertEquals(ReplacementPhase.Ready, opened.phase)
+        date = today.plusDays(1)
+        vm.replaceMeter(); runCurrent()
+        val pending = vm.state.dialog
+        vm.openAdd(); vm.openEdit(one); vm.openDelete(one); vm.openReplacement()
+        vm.dismissDialog(); vm.clearDialogError()
+        vm.replaceMeter(); vm.save(date, "99", Locale.US); vm.delete(); runCurrent()
+        assertEquals(pending, vm.state.dialog)
+        assertEquals(1, repo.replacements.size)
+        assertTrue(repo.saves.isEmpty()); assertTrue(repo.deletes.isEmpty())
+        val intent = repo.replacements.single()
+        assertEquals(opened.target, intent.target)
+        assertEquals(today.plusDays(1), intent.today)
+        repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Rejected(ReplacementError.STALE_DATE))); runCurrent()
+        assertEquals(opened.copy(phase = ReplacementPhase.Unavailable(ReplacementError.STALE_DATE)), vm.state.dialog)
+        vm.clearDialogError()
+        vm.replaceMeter(); runCurrent()
+        assertEquals(1, repo.replacements.size)
+        assertSame(before.dashboard, vm.state.dashboard)
+        assertEquals(before.period, vm.state.period); assertEquals(before.tab, vm.state.tab)
+        vm.dismissDialog(); vm.openReplacement()
+        assertEquals(today.plusDays(1), (vm.state.dialog as ReadingDialog.Replacing).target.date)
+    }
+
+    @Test fun replacementPrerequisiteRoutesToOrdinaryAddAndRepeatedDayIsUnavailable() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        repo.deliver(listOf(one)); runCurrent()
+        vm.openReplacement()
+        assertEquals(ReplacementPhase.Unavailable(ReplacementError.MISSING_FINAL), (vm.state.dialog as ReadingDialog.Replacing).phase)
+        vm.replaceMeter(); runCurrent()
+        assertTrue(repo.replacements.isEmpty())
+        vm.openAdd()
+        assertEquals(ReadingTarget.Add(today), (vm.state.dialog as ReadingDialog.Editing).target)
+        repo.saveOutcomes.send(Result.success(SaveReadingResult.Saved(CommittedSnapshot(2, listOf(one, two)))))
+        vm.save(today, "112.1250", Locale.US); runCurrent()
+        assertEquals(ReadingDialog.Closed, vm.state.dialog)
+        assertTrue(repo.replacements.isEmpty())
+        repo.deliver(replaced(), 3); runCurrent()
+        vm.openReplacement()
+        assertEquals(ReplacementPhase.Unavailable(ReplacementError.ALREADY_REPLACED), (vm.state.dialog as ReadingDialog.Replacing).phase)
+    }
+
+    @Test fun replacementObsoleteAndStorageFailuresRetainConfirmationAndCommittedProjection() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        repo.deliver(listOf(one, two)); runCurrent()
+        vm.openReplacement()
+        val opened = vm.state.dialog as ReadingDialog.Replacing
+        val before = vm.state
+        repo.replacementOutcomes.send(Result.failure(ReadingStorageException(java.io.IOException("private"))))
+        vm.replaceMeter(); runCurrent()
+        assertEquals(opened.copy(phase = ReplacementPhase.Failed(ReadingFailure(ReadingFailureCategory.STORAGE_ACCESS, ReadingAction.REPLACE))), vm.state.dialog)
+        assertSame(before.dashboard, vm.state.dashboard)
+        repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Rejected(ReplacementError.OBSOLETE_TARGET)))
+        vm.replaceMeter(); runCurrent()
+        assertEquals(opened.copy(phase = ReplacementPhase.Unavailable(ReplacementError.OBSOLETE_TARGET)), vm.state.dialog)
+        assertEquals(before.tracker, vm.state.tracker)
+    }
+
+    @Test fun committedReplacementClosesDespiteIndependentObservationFailureAndRetryDoesNotResubmit() = runTest {
+        for (failureBefore in listOf(false, true)) {
+            val repo = ScriptedReadingRepository()
+            val vm = TrackerViewModel(repo) { today }
+            repo.deliver(listOf(one, two)); runCurrent()
+            vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH); vm.navigate(-1)
+            val period = vm.state.period
+            vm.openReplacement(); vm.replaceMeter(); runCurrent()
+            if (failureBefore) { repo.failObservation(); runCurrent() }
+            val committed = replaced()
+            repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Replaced(CommittedSnapshot(3, committed)))); runCurrent()
+            if (!failureBefore) { repo.failObservation(); runCurrent() }
+            assertEquals(ReadingDialog.Closed, vm.state.dialog)
+            assertEquals(ReadingLoadState.ERROR, vm.state.loadState)
+            assertEquals(committed, vm.state.tracker)
+            assertEquals(period, vm.state.period); assertEquals(TrackerTab.HISTORY, vm.state.tab)
+            val dashboard = vm.state.dashboard
+            vm.retryLoad(); runCurrent()
+            repo.deliver(committed, 4); runCurrent()
+            assertEquals(ReadingLoadState.READY, vm.state.loadState)
+            assertSame(dashboard, vm.state.dashboard)
+            assertEquals(1, repo.replacements.size)
+        }
+    }
+
+    @Test fun metadataChangesReprojectButIdenticalReorderedDataAndStaleRevisionsDoNot() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        val tracker = replaced()
+        repo.deliver(tracker); runCurrent()
+        vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH)
+        val before = vm.state
+        assertEquals(listOf("baseline", two.id), vm.state.readings.take(2).map { it.id })
+        val metadataChange = tracker.copy(replacements = tracker.replacements.map { it.copy(id = "other-boundary-id") })
+        repo.deliver(metadataChange, 2); runCurrent()
+        assertNotSame(before.dashboard, vm.state.dashboard)
+        assertEquals(before.dashboard, vm.state.dashboard)
+        assertEquals(before.period, vm.state.period); assertEquals(before.tab, vm.state.tab)
+        val projection = vm.state.dashboard
+        repo.deliver(metadataChange.copy(
+            readings = metadataChange.readings.reversed(), installations = metadataChange.installations.reversed(),
+        ), 3); runCurrent()
+        assertSame(projection, vm.state.dashboard)
+        repo.deliver(tracker, 2); runCurrent()
+        assertEquals(metadataChange, vm.state.tracker)
+        val empty = TrackerData()
+        repo.deliver(empty, 4); runCurrent()
+        val originalProjection = vm.state.dashboard
+        repo.deliver(empty.copy(installations = listOf(MeterInstallation("different-original"))), 5); runCurrent()
+        assertNotSame(originalProjection, vm.state.dashboard)
+    }
+
+    @Test fun boundaryDeletionIsProtectedUpfrontAndAfterAStaleConfirmation() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        repo.deliver(listOf(one, two)); runCurrent()
+        vm.openDelete(two)
+        repo.deleteOutcomes.send(Result.success(DeleteReadingResult.Protected))
+        vm.delete(); runCurrent()
+        assertEquals(DeletePhase.Protected, (vm.state.dialog as ReadingDialog.ConfirmingDeletion).phase)
+        vm.delete(); runCurrent()
+        assertEquals(1, repo.deletes.size)
+        repo.deliver(replaced(), 2); runCurrent()
+        vm.dismissDialog(); vm.openDelete(two)
+        assertEquals(DeletePhase.Protected, (vm.state.dialog as ReadingDialog.ConfirmingDeletion).phase)
+        vm.delete(); runCurrent()
+        assertEquals(1, repo.deletes.size)
+    }
 }
 
 /** Scripts only: never looks up targets, validates, generates IDs, sorts, or mutates records. */
@@ -465,11 +624,14 @@ private class ScriptedReadingRepository : ReadingRepository {
     private val observations = Channel<Result<CommittedSnapshot>>(Channel.UNLIMITED)
     val saveOutcomes = Channel<Result<SaveReadingResult>>(Channel.UNLIMITED)
     val deleteOutcomes = Channel<Result<DeleteReadingResult>>(Channel.UNLIMITED)
+    val replacementOutcomes = Channel<Result<ReplaceMeterResult>>(Channel.UNLIMITED)
     val saves = mutableListOf<SaveReadingIntent>()
     val deletes = mutableListOf<String>()
+    val replacements = mutableListOf<ReplaceMeterIntent>()
     var subscriptions = 0
 
     suspend fun deliver(readings: List<Reading>, revision: Long = 1) = observations.send(Result.success(CommittedSnapshot(revision, readings)))
+    suspend fun deliver(tracker: TrackerData, revision: Long = 1) = observations.send(Result.success(CommittedSnapshot(revision, tracker)))
     suspend fun failObservation(error: ReadingStorageException = ReadingStorageException(java.io.IOException())) =
         observations.send(Result.failure(error))
 
@@ -486,5 +648,10 @@ private class ScriptedReadingRepository : ReadingRepository {
     override suspend fun delete(id: String): DeleteReadingResult {
         deletes += id
         return deleteOutcomes.receive().getOrThrow()
+    }
+
+    override suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult {
+        replacements += intent
+        return replacementOutcomes.receive().getOrThrow()
     }
 }

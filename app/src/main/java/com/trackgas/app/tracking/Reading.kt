@@ -16,9 +16,11 @@ data class Reading(
     val id: String,
     val date: LocalDate,
     val cubicMetres: BigDecimal,
+    val installationId: String = ORIGINAL_INSTALLATION_ID,
 ) {
     init {
         require(id.isNotBlank()) { "Reading identity must not be blank" }
+        require(installationId.isNotBlank()) { "Installation identity must not be blank" }
         require(cubicMetres.signum() >= 0) { "Cumulative meter value must not be negative" }
     }
 }

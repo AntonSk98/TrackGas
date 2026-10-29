@@ -8,6 +8,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
+import java.time.LocalDate
+import java.util.Locale
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -43,5 +45,44 @@ class ReadingFormLayoutUiTest {
         rule.onNodeWithText("Save").performScrollTo().assertIsDisplayed().performClick()
         rule.onNodeWithText("Cancel").performScrollTo().assertIsDisplayed().performClick()
         rule.runOnIdle { assertEquals(1, saved); assertEquals(1, cancelled) }
+    }
+
+    @Test fun replacementAt360DpAndDoubleFontsKeepsReadOnlyDateStorageErrorAndActionsReachable() {
+        var confirmed = 0
+        var cancelled = 0
+        val date = LocalDate.of(2026, 10, 28)
+        val reading = Reading("final", date, "1105.0000".toBigDecimal())
+        rule.setContent {
+            val base = LocalConfiguration.current
+            val configuration = Configuration(base).apply { screenWidthDp = 360; fontScale = 2f }
+            val density = LocalDensity.current.density * base.screenWidthDp / 360f
+            CompositionLocalProvider(
+                LocalConfiguration provides configuration,
+                LocalDensity provides Density(density, 2f),
+            ) {
+                MaterialTheme {
+                    ReplacementForm(
+                        dialog = ReadingDialog.Replacing(
+                            "replacement", ReplacementTarget(date, reading.installationId, reading),
+                            ReplacementPhase.Failed(ReadingFailure(ReadingFailureCategory.STORAGE_ACCESS, ReadingAction.REPLACE)),
+                        ),
+                        locale = Locale.US, loadState = ReadingLoadState.READY,
+                        onRetryLoad = {},
+                        onConfirm = { confirmed++ }, onAddFinal = {},
+                        onDismiss = { cancelled++ },
+                    )
+                }
+            }
+        }
+        rule.onNode(hasText("Date") and hasText("Oct 28, 2026")).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithContentDescription("Choose date: Oct 28, 2026").assertDoesNotExist()
+        rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+        rule.onNodeWithText("1105.0000", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("New meter starts at 0 m³ today.").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Could not replace meter. Try again.")
+            .performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Confirm replacement").performScrollTo().assertIsDisplayed().performClick()
+        rule.onNodeWithText("Cancel").performScrollTo().assertIsDisplayed().performClick()
+        rule.runOnIdle { assertEquals(1, confirmed); assertEquals(1, cancelled) }
     }
 }

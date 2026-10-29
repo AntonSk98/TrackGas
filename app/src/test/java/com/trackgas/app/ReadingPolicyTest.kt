@@ -67,4 +67,27 @@ class ReadingPolicyTest {
         assertTrue(dashboard(listOf(baseline), period).buckets.isEmpty())
         assertNull(dashboard(emptyList(), period).total.cubicMetres)
     }
+
+    @Test fun addResolvesInstallationFromCurrentChainWhileEditPreservesMembership() {
+        val final = last.copy(date = today.minusDays(1))
+        val initial = Reading("baseline", final.date, "0.0000".toBigDecimal(), "new")
+        val next = Reading("next", today, "3".toBigDecimal(), "new")
+        val tracker = TrackerData(
+            listOf(first, final, initial, next),
+            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", final.date)),
+            listOf(MeterReplacement("replacement", final.date, ORIGINAL_INSTALLATION_ID, "new", final.id, initial.id)),
+        )
+        val historical = (evaluateSave(tracker, add(first.date.plusDays(1), "105"), "historical") as ReadingValidation.Accepted).candidate
+        assertEquals(ORIGINAL_INSTALLATION_ID, historical.installationId)
+        assertEquals(ReadingError.DUPLICATE_DATE,
+            (evaluateSave(tracker, add(final.date, "0"), "duplicate") as ReadingValidation.Rejected).errors.date)
+        val edit = (evaluateSave(tracker, SaveReadingIntent.Edit(initial.id, parseMeter("1.0000", Locale.US), today)) as ReadingValidation.Accepted).candidate
+        assertEquals(initial.copy(cubicMetres = "1.0000".toBigDecimal()), edit)
+        assertEquals(ReadingError.ABOVE_NEXT,
+            (evaluateSave(tracker, SaveReadingIntent.Edit(initial.id, parseMeter("4", Locale.US), today)) as ReadingValidation.Rejected).errors.value)
+        assertEquals(ReadingError.BELOW_PREVIOUS,
+            (evaluateSave(tracker, add(today.plusDays(1), "2", today.plusDays(1)), "lower") as ReadingValidation.Rejected).errors.value)
+        assertEquals(ReadingError.ABOVE_NEXT,
+            (evaluateSave(tracker, add(first.date.plusDays(1), "200"), "high") as ReadingValidation.Rejected).errors.value)
+    }
 }

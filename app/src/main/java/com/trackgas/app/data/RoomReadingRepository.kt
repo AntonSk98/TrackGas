@@ -25,7 +25,7 @@ class RoomReadingRepository internal constructor(
     override fun observeReadings(): Flow<CommittedSnapshot> =
         dao.observeAll().map {
             // Room payloads are only invalidation triggers: buffered rows may predate a commit.
-            ordering.withLock { snapshot(readRows()) }
+            ordering.withLock { snapshot(database.withTransaction { readRows() }) }
         }.catch { failure -> throw classifyReadingFailure(failure) }
 
     override suspend fun save(intent: SaveReadingIntent): SaveReadingResult = readingStorageOperation {
@@ -55,28 +55,75 @@ class RoomReadingRepository internal constructor(
         }
     }
 
+    override suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult = readingStorageOperation {
+        ordering.withLock {
+            val result = database.withTransaction {
+                val tracker = readRows()
+                when (val validation = evaluateReplacement(tracker, intent, newIdentity(), newIdentity(), newIdentity())) {
+                    is ReplacementValidation.Rejected -> ReplaceRows.Rejected(validation.error)
+                    is ReplacementValidation.Accepted -> {
+                        val next = validation.tracker
+                        val installation = next.installations.last()
+                        val replacement = next.replacements.last()
+                        dao.insertInstallation(InstallationEntity(installation.id, installation.startDate?.toString()))
+                        dao.insert(next.readings.last().toEntity())
+                        dao.insertReplacement(ReplacementEntity(replacement.id, replacement.date.toString(),
+                            replacement.oldInstallationId, replacement.newInstallationId, replacement.finalReadingId, replacement.initialReadingId))
+                        ReplaceRows.Accepted(readRows())
+                    }
+                }
+            }
+            when (result) {
+                is ReplaceRows.Rejected -> ReplaceMeterResult.Rejected(result.error)
+                is ReplaceRows.Accepted -> ReplaceMeterResult.Replaced(snapshot(result.tracker))
+            }
+        }
+    }
+
     override suspend fun delete(id: String): DeleteReadingResult = readingStorageOperation {
         ordering.withLock {
-            val rows = database.withTransaction {
-                readRows()
-                if (dao.delete(id) == 0) null else readRows()
+            val result = database.withTransaction {
+                when (evaluateDeletion(readRows(), id)) {
+                    DeletionValidation.MISSING -> DeleteRows.Missing
+                    DeletionValidation.PROTECTED -> DeleteRows.Protected
+                    DeletionValidation.ALLOWED -> {
+                        check(dao.delete(id) == 1) { "Reading disappeared during delete" }
+                        DeleteRows.Accepted(readRows())
+                    }
+                }
             }
-            if (rows == null) DeleteReadingResult.Missing else DeleteReadingResult.Deleted(snapshot(rows))
+            when (result) {
+                DeleteRows.Missing -> DeleteReadingResult.Missing
+                DeleteRows.Protected -> DeleteReadingResult.Protected
+                is DeleteRows.Accepted -> DeleteReadingResult.Deleted(snapshot(result.tracker))
+            }
         }
     }
 
-    private suspend fun readRows(): List<Reading> {
-        val readings = dao.getAll().map { it.toReading() }
-        readingCollectionViolation(readings)?.let {
+    private suspend fun readRows(): TrackerData {
+        val tracker = TrackerData(dao.getAll().map { it.toReading() },
+            dao.getInstallations().map { it.toInstallation() }, dao.getReplacements().map { it.toReplacement() })
+        readingCollectionViolation(tracker)?.let {
             throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored reading collection: $it"))
         }
-        return readings
+        return tracker
     }
 
-    private fun snapshot(readings: List<Reading>) = CommittedSnapshot(++revision, readings)
+    private fun snapshot(tracker: TrackerData) = CommittedSnapshot(++revision, tracker)
 
     private sealed interface SaveRows {
         data class Invalid(val errors: ReadingErrors) : SaveRows
-        data class Accepted(val readings: List<Reading>) : SaveRows
+        data class Accepted(val readings: TrackerData) : SaveRows
+    }
+
+    private sealed interface ReplaceRows {
+        data class Rejected(val error: ReplacementError) : ReplaceRows
+        data class Accepted(val tracker: TrackerData) : ReplaceRows
+    }
+
+    private sealed interface DeleteRows {
+        data object Missing : DeleteRows
+        data object Protected : DeleteRows
+        data class Accepted(val tracker: TrackerData) : DeleteRows
     }
 }

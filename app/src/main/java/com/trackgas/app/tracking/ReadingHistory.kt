@@ -32,7 +32,11 @@ internal fun LazyListScope.historyItems(
     locale: Locale,
     onEdit: (Reading) -> Unit,
     onDelete: (Reading) -> Unit,
+    tracker: TrackerData = TrackerData(readings),
 ) {
+    val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
+    val meterNumbers = installations.mapIndexed { index, installation -> installation.id to index + 1 }.toMap()
+    val ordered = readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { meterNumbers[it.installationId] })
     item(key = "history-heading") {
         Text(
             stringResource(R.string.reading_history),
@@ -54,10 +58,22 @@ internal fun LazyListScope.historyItems(
             }
         }
     }
-    items(readings, key = { it.id }) { reading ->
+    items(ordered, key = { it.id }) { reading ->
         val date = dateText(reading.date, locale)
-        val editLabel = stringResource(R.string.edit_description, date)
-        val deleteLabel = stringResource(R.string.delete_description, date)
+        val meter = stringResource(R.string.meter_number, meterNumbers.getValue(reading.installationId))
+        val role = when {
+            tracker.replacements.any { it.initialReadingId == reading.id } -> stringResource(R.string.initial_reading)
+            tracker.replacements.any { it.finalReadingId == reading.id } -> stringResource(R.string.final_reading)
+            else -> stringResource(R.string.ordinary_reading)
+        }
+        val identity = stringResource(
+            R.string.reading_identity, date,
+            stringResource(R.string.volume, numberText(reading.cubicMetres, locale, raw = true)), meter, role,
+        )
+        val editLabel = if (installations.size == 1) stringResource(R.string.edit_description, date)
+            else stringResource(R.string.edit_meter_description, identity)
+        val deleteLabel = if (installations.size == 1) stringResource(R.string.delete_description, date)
+            else stringResource(R.string.delete_meter_description, identity)
         Column(
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 .combinedClickable(
@@ -70,6 +86,9 @@ internal fun LazyListScope.historyItems(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(date, style = MaterialTheme.typography.titleMedium)
+            if (installations.size > 1) {
+                Text(stringResource(R.string.meter_role, meter, role), style = MaterialTheme.typography.bodyMedium)
+            }
             Text(
                 stringResource(R.string.volume, numberText(reading.cubicMetres, locale, raw = true)),
                 style = MaterialTheme.typography.headlineSmall,

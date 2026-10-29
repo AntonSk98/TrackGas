@@ -3,6 +3,7 @@ package com.trackgas.app.data
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import com.trackgas.app.tracking.*
 import java.time.LocalDate
@@ -20,7 +21,8 @@ class OrderedRepositoryTest {
     private fun intent(day: Int, value: String) = SaveReadingIntent.Add(today.withDayOfMonth(day), ParsedMeter.Value(value.toBigDecimal()), today)
 
     @Before fun setUp() {
-        database = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), ReadingDatabase::class.java).build()
+        database = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), ReadingDatabase::class.java)
+            .addCallback(ReadingDatabase.INITIALIZE).build()
     }
     @After fun tearDown() = database.close()
 
@@ -58,7 +60,12 @@ class OrderedRepositoryTest {
         val captured = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var firstRead = true
+        var insertCalls = 0
         val decorated = object : ReadingDao by dao {
+            override suspend fun insert(reading: ReadingEntity) {
+                insertCalls++
+                dao.insert(reading)
+            }
             override suspend fun getAll(): List<ReadingEntity> {
                 val rows = dao.getAll()
                 if (firstRead) {
@@ -74,7 +81,7 @@ class OrderedRepositoryTest {
         withTimeout(5_000) { captured.await() }
         val mutation = async(start = CoroutineStart.UNDISPATCHED) { repository.save(intent(2, "101")) as SaveReadingResult.Saved }
         assertFalse(mutation.isCompleted)
-        assertEquals(1, dao.getAll().size)
+        assertEquals(0, insertCalls)
         release.complete(Unit)
         val old = withTimeout(5_000) { observation.await() }
         val committed = withTimeout(5_000) { mutation.await().snapshot }
@@ -184,5 +191,222 @@ class OrderedRepositoryTest {
         } finally {
             withContext(Dispatchers.Main) { firstStore.clear(); secondStore.clear() }
         }
+    }
+
+    private suspend fun prepareReplacement(repository: RoomReadingRepository): ReplaceMeterIntent {
+        repository.save(intent(25, "1100.0000"))
+        repository.save(intent(26, "1105.0000"))
+        return ReplaceMeterIntent(replacementTarget(repository.observeReadings().first().tracker, today), today)
+    }
+
+    @Test fun cancellationAtEveryReplacementWriteRollsBackFullAggregateWithoutRevision() = runBlocking {
+        val dao = database.readings()
+        val setup = RoomReadingRepository(database)
+        val intent = prepareReplacement(setup)
+        val before = setup.observeReadings().first().tracker
+        for (stage in listOf("installation", "reading", "replacement")) {
+            val entered = CompletableDeferred<Unit>()
+            suspend fun pause(at: String) {
+                if (stage == at) { entered.complete(Unit); awaitCancellation() }
+            }
+            val decorated = object : ReadingDao by dao {
+                override suspend fun insertInstallation(installation: InstallationEntity) {
+                    dao.insertInstallation(installation); pause("installation")
+                }
+                override suspend fun insert(reading: ReadingEntity) {
+                    dao.insert(reading); pause("reading")
+                }
+                override suspend fun insertReplacement(replacement: ReplacementEntity) {
+                    dao.insertReplacement(replacement); pause("replacement")
+                }
+            }
+            val repository = RoomReadingRepository(database, decorated) { java.util.UUID.randomUUID().toString() }
+            val job = launch { repository.replaceMeter(intent) }
+            withTimeout(5_000) { entered.await() }
+            job.cancelAndJoin()
+            val after = repository.observeReadings().first()
+            assertEquals(1L, after.revision)
+            assertEquals(before, after.tracker)
+        }
+    }
+
+    @Test fun competingReplacementsCommitAtMostOnceAcrossRepositorySessions() = runBlocking {
+        val first = RoomReadingRepository(database)
+        val second = RoomReadingRepository(database)
+        val intent = prepareReplacement(first)
+        val results = listOf(async { first.replaceMeter(intent) }, async { second.replaceMeter(intent) }).awaitAll()
+        assertEquals(1, results.count { it is ReplaceMeterResult.Replaced })
+        assertEquals(ReplacementError.OBSOLETE_TARGET, (results.single { it is ReplaceMeterResult.Rejected } as ReplaceMeterResult.Rejected).error)
+        val tracker = first.observeReadings().first().tracker
+        assertEquals(2, tracker.installations.size)
+        assertEquals(1, tracker.replacements.size)
+        assertEquals(3, tracker.readings.size)
+        assertEquals(tracker, second.observeReadings().first().tracker)
+    }
+
+    @Test fun editAndDeleteRacesRevalidateFinalTargetsAndProtectCommittedBoundaries() = runBlocking {
+        val repository = RoomReadingRepository(database)
+        val intent = prepareReplacement(repository)
+        val final = intent.target.finalReading!!
+        val edited = repository.save(SaveReadingIntent.Edit(final.id, ParsedMeter.Value("1106".toBigDecimal()), today))
+        assertTrue(edited is SaveReadingResult.Saved)
+        assertEquals(ReplacementError.OBSOLETE_TARGET, (repository.replaceMeter(intent) as ReplaceMeterResult.Rejected).error)
+        val freshIntent = intent.copy(target = replacementTarget(repository.observeReadings().first().tracker, today))
+        val deletion = async { repository.delete(final.id) }
+        val replacement = async { repository.replaceMeter(freshIntent) }
+        val deleted = deletion.await()
+        val replaced = replacement.await()
+        when (deleted) {
+            is DeleteReadingResult.Deleted -> {
+                assertEquals(ReplacementError.OBSOLETE_TARGET, (replaced as ReplaceMeterResult.Rejected).error)
+                assertTrue(repository.observeReadings().first().tracker.replacements.isEmpty())
+            }
+            DeleteReadingResult.Protected -> assertTrue(replaced is ReplaceMeterResult.Replaced)
+            else -> fail("Unexpected delete outcome")
+        }
+    }
+
+    @Test fun staleAddDraftResolvesLatestInstallationAndHistoricalMembership() = runBlocking {
+        val repository = RoomReadingRepository(database)
+        val replacement = prepareReplacement(repository)
+        val staleDraft = SaveReadingIntent.Add(today.plusDays(1), ParsedMeter.Value("3.0000".toBigDecimal()), today.plusDays(1))
+        val committed = (repository.replaceMeter(replacement) as ReplaceMeterResult.Replaced).snapshot
+        val added = (repository.save(staleDraft) as SaveReadingResult.Saved).snapshot
+        assertEquals(committed.tracker.currentInstallation.id, added.readings.first().installationId)
+        val historical = (repository.save(intent(24, "1099.0000")) as SaveReadingResult.Saved).snapshot
+        assertEquals(ORIGINAL_INSTALLATION_ID, historical.readings.single { it.date.dayOfMonth == 24 }.installationId)
+        assertEquals(ReadingError.DUPLICATE_DATE, (repository.save(intent(26, "1105")) as SaveReadingResult.Invalid).errors.date)
+    }
+
+    @Test fun pendingReplacementCannotPublishPartialTablesAndDelayedPayloadRecapturesAllMetadata() = runBlocking {
+        val dao = database.readings()
+        val setup = RoomReadingRepository(database)
+        val intent = prepareReplacement(setup)
+        val oldPayload = dao.getAll()
+        val inserted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val triggers = Channel<List<ReadingEntity>>(Channel.UNLIMITED)
+        val decorated = object : ReadingDao by dao {
+            override fun observeAll(): Flow<List<ReadingEntity>> = triggers.receiveAsFlow()
+            override suspend fun insertReplacement(replacement: ReplacementEntity) {
+                dao.insertReplacement(replacement)
+                inserted.complete(Unit)
+                release.await()
+            }
+        }
+        val repository = RoomReadingRepository(database, decorated) { java.util.UUID.randomUUID().toString() }
+        val mutation = async { repository.replaceMeter(intent) as ReplaceMeterResult.Replaced }
+        withTimeout(5_000) { inserted.await() }
+        val observed = async(start = CoroutineStart.UNDISPATCHED) { repository.observeReadings().first() }
+        triggers.send(oldPayload)
+        assertFalse(observed.isCompleted)
+        release.complete(Unit)
+        val committed = mutation.await().snapshot
+        val fresh = observed.await()
+        assertTrue(fresh.revision > committed.revision)
+        assertEquals(committed.tracker, fresh.tracker)
+        assertEquals(2, fresh.tracker.installations.size)
+        assertEquals(1, fresh.tracker.replacements.size)
+        assertEquals(3, fresh.readings.size)
+    }
+
+    @Test fun metadataOnlyWritesInvalidateReplacementAndInstallationObservation() = runBlocking {
+        val repository = RoomReadingRepository(database)
+        repository.replaceMeter(prepareReplacement(repository))
+        val deliveries = Channel<CommittedSnapshot>(Channel.UNLIMITED)
+        val failures = Channel<Throwable>(Channel.UNLIMITED)
+        val observer = launch {
+            repository.observeReadings().catch { failures.send(it) }.collect { deliveries.send(it) }
+        }
+        try {
+            val initial = withTimeout(5_000) { deliveries.receive() }
+            database.withTransaction {
+                database.openHelper.writableDatabase.execSQL("UPDATE replacements SET id = 'changed-metadata'")
+            }
+            val changed = withTimeout(5_000) { deliveries.receive() }
+            assertEquals(initial.readings, changed.readings)
+            assertEquals("changed-metadata", changed.tracker.replacements.single().id)
+            assertTrue(changed.revision > initial.revision)
+            database.readings().insertInstallation(InstallationEntity("disconnected", "2026-10-27"))
+            val failure = withTimeout(5_000) { failures.receive() }
+            assertEquals(ReadingFailureCategory.STORED_DATA, (failure as ReadingStorageException).category)
+        } finally { observer.cancelAndJoin() }
+    }
+
+    @Test fun competingFinalEditAndReplacementEitherRejectStaleTargetOrCorrectProtectedEndpoint() = runBlocking {
+        val repository = RoomReadingRepository(database)
+        val intent = prepareReplacement(repository)
+        val final = intent.target.finalReading!!
+        val results = awaitAll(
+            async { repository.replaceMeter(intent) },
+            async { repository.save(SaveReadingIntent.Edit(final.id, ParsedMeter.Value("1106.0000".toBigDecimal()), today)) },
+        )
+        assertTrue(results[1] is SaveReadingResult.Saved)
+        val tracker = repository.observeReadings().first().tracker
+        assertEquals("1106.0000", tracker.readings.single { it.id == final.id }.cubicMetres.toString())
+        when (val replacement = results[0]) {
+            is ReplaceMeterResult.Replaced -> {
+                assertEquals(1, tracker.replacements.size)
+                assertEquals(final.id, tracker.replacements.single().finalReadingId)
+                assertEquals(DeleteReadingResult.Protected, repository.delete(final.id))
+            }
+            is ReplaceMeterResult.Rejected -> {
+                assertEquals(ReplacementError.OBSOLETE_TARGET, replacement.error)
+                assertTrue(tracker.replacements.isEmpty())
+            }
+            else -> fail("Unexpected replacement outcome")
+        }
+    }
+
+    @Test fun aggregateReadTransactionCannotInterleaveExternalMetadataAndReadingCommit() = runBlocking {
+        val setup = RoomReadingRepository(database)
+        val before = (setup.replaceMeter(prepareReplacement(setup)) as ReplaceMeterResult.Replaced).snapshot.tracker
+        val boundary = before.replacements.single()
+        val dao = database.readings()
+        val captured = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val decorated = object : ReadingDao by dao {
+            override fun observeAll(): Flow<List<ReadingEntity>> = flowOf(emptyList())
+            override suspend fun getAll(): List<ReadingEntity> {
+                val rows = dao.getAll()
+                captured.complete(Unit)
+                release.await()
+                return rows
+            }
+        }
+        val repository = RoomReadingRepository(database, decorated) { "unused" }
+        val observation = async { repository.observeReadings().first() }
+        withTimeout(5_000) { captured.await() }
+        val writer = async(start = CoroutineStart.UNDISPATCHED) {
+            database.withTransaction {
+                dao.update(before.readings.single { it.id == boundary.initialReadingId }.copy(cubicMetres = "1.0000".toBigDecimal()).toEntity())
+                database.openHelper.writableDatabase.execSQL("UPDATE replacements SET id = 'external-commit'")
+            }
+        }
+        assertFalse(writer.isCompleted)
+        release.complete(Unit)
+        val old = withTimeout(5_000) { observation.await() }
+        assertEquals(before, old.tracker)
+        withTimeout(5_000) { writer.await() }
+        val latest = repository.observeReadings().first()
+        assertEquals("external-commit", latest.tracker.replacements.single().id)
+        assertEquals("1.0000", latest.readings.single { it.id == boundary.initialReadingId }.cubicMetres.toString())
+        assertTrue(latest.revision > old.revision)
+    }
+
+    @Test fun cancelledReplacementCallerAfterCommitDoesNotUndoOrResubmitReplacement() = runBlocking {
+        val repository = RoomReadingRepository(database)
+        val intent = prepareReplacement(repository)
+        val committed = CompletableDeferred<CommittedSnapshot>()
+        val caller = launch {
+            val result = repository.replaceMeter(intent) as ReplaceMeterResult.Replaced
+            committed.complete(result.snapshot)
+            awaitCancellation()
+        }
+        val snapshot = withTimeout(5_000) { committed.await() }
+        caller.cancelAndJoin()
+        assertEquals(snapshot.tracker, repository.observeReadings().first().tracker)
+        assertEquals(snapshot.tracker, RoomReadingRepository(database).observeReadings().first().tracker)
+        assertEquals(ReplacementError.OBSOLETE_TARGET, (repository.replaceMeter(intent) as ReplaceMeterResult.Rejected).error)
     }
 }

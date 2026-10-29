@@ -73,6 +73,8 @@ private fun TrackGasApp(tracker: TrackerViewModel) {
             onClearDialogError = tracker::clearDialogError,
             onSave = tracker::save,
             onDelete = tracker::delete,
+            onOpenReplacement = tracker::openReplacement,
+            onReplaceMeter = tracker::replaceMeter,
         )
     }
 }

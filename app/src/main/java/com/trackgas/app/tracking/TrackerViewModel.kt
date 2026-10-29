@@ -24,6 +24,7 @@ data class TrackerState(
     val loadFailure: ReadingFailure? = null,
     val dialog: ReadingDialog = ReadingDialog.Closed,
     val sessionId: String = UUID.randomUUID().toString(),
+    val tracker: TrackerData = TrackerData(readings),
 )
 
 /** Publishes projections only from committed repository snapshots. */
@@ -48,9 +49,9 @@ class TrackerViewModel(
         state = state.copy(tab = tab)
     }
 
-    fun selectPeriod(type: PeriodType) = project(state.readings, CalendarPeriod.containing(type, today()))
+    fun selectPeriod(type: PeriodType) = project(state.tracker, CalendarPeriod.containing(type, today()))
 
-    fun navigate(offset: Long) = project(state.readings, state.period.navigate(offset))
+    fun navigate(offset: Long) = project(state.tracker, state.period.navigate(offset))
 
     fun retryLoad() {
         if (state.loadState == ReadingLoadState.ERROR) observeReadings()
@@ -79,7 +80,18 @@ class TrackerViewModel(
 
     fun openEdit(reading: Reading) = open(ReadingDialog.Editing(newId(), ReadingTarget.Edit(reading)))
 
-    fun openDelete(reading: Reading) = open(ReadingDialog.ConfirmingDeletion(newId(), reading))
+    fun openDelete(reading: Reading) = open(ReadingDialog.ConfirmingDeletion(
+        newId(), reading, if (state.tracker.isBoundaryReading(reading.id)) DeletePhase.Protected else DeletePhase.Ready,
+    ))
+
+    fun openReplacement() {
+        if (state.loadState != ReadingLoadState.READY || state.dialog.pending) return
+        val date = today()
+        val target = replacementTarget(state.tracker, date)
+        val phase = replacementTargetError(state.tracker, target, date)?.let { ReplacementPhase.Unavailable(it) }
+            ?: ReplacementPhase.Ready
+        open(ReadingDialog.Replacing(newId(), target, phase))
+    }
 
     private fun open(dialog: ReadingDialog) {
         if (state.loadState == ReadingLoadState.READY && !state.dialog.pending) state = state.copy(dialog = dialog)
@@ -93,6 +105,27 @@ class TrackerViewModel(
         val dialog = state.dialog
         if (dialog is ReadingDialog.Editing && dialog.phase !is SavePhase.Pending) {
             state = state.copy(dialog = dialog.copy(phase = SavePhase.Ready))
+        }
+    }
+
+    fun replaceMeter() {
+        val dialog = state.dialog as? ReadingDialog.Replacing ?: return
+        if (state.loadState != ReadingLoadState.READY || dialog.pending || dialog.phase is ReplacementPhase.Unavailable) return
+        val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
+        val intent = ReplaceMeterIntent(dialog.target, today())
+        state = state.copy(dialog = dialog.copy(phase = ReplacementPhase.Pending(request.requestId)))
+        viewModelScope.launch {
+            try {
+                when (val result = repository.replaceMeter(intent)) {
+                    is ReplaceMeterResult.Rejected -> finishReplacement(request, ReplacementPhase.Unavailable(result.error))
+                    is ReplaceMeterResult.Replaced -> {
+                        acceptCommittedSnapshot(result.snapshot)
+                        finishReplacement(request, null)
+                    }
+                }
+            } catch (error: ReadingStorageException) {
+                finishReplacement(request, ReplacementPhase.Failed(ReadingFailure(error.category, ReadingAction.REPLACE)))
+            }
         }
     }
 
@@ -123,13 +156,14 @@ class TrackerViewModel(
 
     fun delete() {
         val dialog = state.dialog as? ReadingDialog.ConfirmingDeletion ?: return
-        if (state.loadState != ReadingLoadState.READY || dialog.pending) return
+        if (state.loadState != ReadingLoadState.READY || dialog.pending || dialog.phase == DeletePhase.Protected) return
         val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
         state = state.copy(dialog = dialog.copy(phase = DeletePhase.Pending(request.requestId)))
         viewModelScope.launch {
             try {
                 when (val result = repository.delete(dialog.reading.id)) {
                     DeleteReadingResult.Missing -> finishDelete(request, DeletePhase.Missing)
+                    DeleteReadingResult.Protected -> finishDelete(request, DeletePhase.Protected)
                     is DeleteReadingResult.Deleted -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishDelete(request, null)
@@ -149,20 +183,31 @@ class TrackerViewModel(
         state = state.copy(dialog = state.dialog.completeDelete(request, state.sessionId, phase))
     }
 
+    private fun finishReplacement(request: ReadingRequest, phase: ReplacementPhase?) {
+        state = state.copy(dialog = state.dialog.completeReplacement(request, state.sessionId, phase))
+    }
+
     private fun newId() = UUID.randomUUID().toString()
 
     private fun acceptCommittedSnapshot(snapshot: CommittedSnapshot) {
         if (snapshot.revision <= acceptedRevision) return
         acceptedRevision = snapshot.revision
-        // Reading equality includes BigDecimal scale. Avoid sorting/projecting duplicate data.
-        if (snapshot.readings.size == state.readings.size &&
-            snapshot.readings.associateBy { it.id } == state.readings.associateBy { it.id }
+        // All three collections matter; reading equality includes exact decimal scale.
+        if (snapshot.tracker.readings.size == state.tracker.readings.size &&
+            snapshot.tracker.installations.size == state.tracker.installations.size &&
+            snapshot.tracker.replacements.size == state.tracker.replacements.size &&
+            snapshot.readings.associateBy { it.id } == state.tracker.readings.associateBy { it.id } &&
+            snapshot.tracker.installations.associateBy { it.id } == state.tracker.installations.associateBy { it.id } &&
+            snapshot.tracker.replacements.associateBy { it.id } == state.tracker.replacements.associateBy { it.id }
         ) return
-        project(snapshot.readings.sortedByDescending { it.date }, state.period)
+        project(snapshot.tracker, state.period)
     }
 
-    private fun project(readings: List<Reading>, period: CalendarPeriod) {
-        state = state.copy(readings = readings, period = period, dashboard = dashboard(readings, period))
+    private fun project(tracker: TrackerData, period: CalendarPeriod) {
+        val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
+            .mapIndexed { index, installation -> installation.id to index }.toMap()
+        val readings = tracker.readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { installations.getValue(it.installationId) })
+        state = state.copy(readings = readings, tracker = tracker, period = period, dashboard = dashboard(tracker, period))
     }
 
     companion object {

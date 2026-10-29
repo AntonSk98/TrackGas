@@ -3,7 +3,7 @@ package com.trackgas.app.tracking
 import kotlinx.coroutines.flow.Flow
 
 enum class ReadingFailureCategory { STORAGE_ACCESS, STORED_DATA }
-enum class ReadingAction { LOAD, SAVE, DELETE }
+enum class ReadingAction { LOAD, SAVE, DELETE, REPLACE }
 data class ReadingFailure(val category: ReadingFailureCategory, val action: ReadingAction)
 
 class ReadingStorageException(
@@ -19,17 +19,26 @@ sealed interface SaveReadingResult {
 sealed interface DeleteReadingResult {
     data class Deleted(val snapshot: CommittedSnapshot) : DeleteReadingResult
     data object Missing : DeleteReadingResult
+    data object Protected : DeleteReadingResult
+}
+
+sealed interface ReplaceMeterResult {
+    data class Replaced(val snapshot: CommittedSnapshot) : ReplaceMeterResult
+    data class Rejected(val error: ReplacementError) : ReplaceMeterResult
 }
 
 /**
- * Full committed readings with unique identities/dates and nondecreasing chronological meter values.
+ * Full committed tracker with installation-local chronology and explicit replacement boundaries.
  *
  * [revision] orders captures and commits within one repository instance, not across processes or
  * instances. It is not a database version or a reading count. Row order is unspecified; exact
  * decimal scale remains significant. Implementations must keep [readings] stable after delivery,
  * and consumers must not mutate it.
  */
-data class CommittedSnapshot(val revision: Long, val readings: List<Reading>)
+data class CommittedSnapshot(val revision: Long, val tracker: TrackerData) {
+    constructor(revision: Long, readings: List<Reading>) : this(revision, TrackerData(readings))
+    val readings: List<Reading> get() = tracker.readings
+}
 
 /**
  * Transactional reading storage with one process-local revision domain shared by all consumers.
@@ -72,4 +81,7 @@ interface ReadingRepository {
      * An absent target returns [DeleteReadingResult.Missing] without a successful mutation snapshot.
      */
     suspend fun delete(id: String): DeleteReadingResult
+
+    /** Atomically revalidates the expected final reading and starts the next installation at zero. */
+    suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult
 }

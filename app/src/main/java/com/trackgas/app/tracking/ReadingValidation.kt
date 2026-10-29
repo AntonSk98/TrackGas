@@ -24,36 +24,59 @@ sealed interface ReadingValidation {
 
 /** Shared by live date selection and final save; an edit cannot conflict with itself. */
 fun validateReadingDate(readings: List<Reading>, id: String?, date: LocalDate?, today: LocalDate): ReadingError? =
-    when {
+    validateReadingDate(TrackerData(readings), id, date, today)
+
+/** Replacement days are occupied; other dates unambiguously belong to one installation. */
+fun installationForDate(tracker: TrackerData, date: LocalDate): MeterInstallation? {
+    if (tracker.replacements.any { it.date == date }) return null
+    return tracker.installations.filter { it.startDate == null || it.startDate < date }
+        .maxWithOrNull(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
+}
+
+fun validateReadingDate(tracker: TrackerData, id: String?, date: LocalDate?, today: LocalDate): ReadingError? {
+    val installationId = tracker.readings.firstOrNull { it.id == id }?.installationId
+        ?: date?.let { installationForDate(tracker, it)?.id }
+    return when {
         date == null -> ReadingError.DATE_REQUIRED
         date > today -> ReadingError.FUTURE_DATE
-        readings.any { it.id != id && it.date == date } -> ReadingError.DUPLICATE_DATE
+        installationId == null -> ReadingError.DUPLICATE_DATE
+        tracker.readings.any { it.id != id && it.installationId == installationId && it.date == date } -> ReadingError.DUPLICATE_DATE
         else -> null
     }
+}
 
 /** Pure Add policy; callers supply the latest transactional rows and a new identity. */
 fun evaluateSave(
     readings: List<Reading>,
     intent: SaveReadingIntent.Add,
     addId: String,
-): ReadingValidation = evaluateCandidate(readings, addId, intent.date, intent.meter, intent.today)
+): ReadingValidation = evaluateSave(TrackerData(readings), intent, addId)
+
+fun evaluateSave(tracker: TrackerData, intent: SaveReadingIntent.Add, addId: String): ReadingValidation =
+    evaluateCandidate(tracker, addId, intent.date, intent.meter, intent.today,
+        intent.date?.let { installationForDate(tracker, it)?.id })
 
 /** Pure Edit policy; the latest persisted target supplies its immutable identity and date. */
 fun evaluateSave(readings: List<Reading>, intent: SaveReadingIntent.Edit): ReadingValidation {
-    val existing = readings.firstOrNull { it.id == intent.id }
+    return evaluateSave(TrackerData(readings), intent)
+}
+
+fun evaluateSave(tracker: TrackerData, intent: SaveReadingIntent.Edit): ReadingValidation {
+    val existing = tracker.readings.firstOrNull { it.id == intent.id }
         ?: return ReadingValidation.Rejected(ReadingErrors(value = ReadingError.MISSING_READING))
-    return evaluateCandidate(readings, existing.id, existing.date, intent.meter, intent.today)
+    return evaluateCandidate(tracker, existing.id, existing.date, intent.meter, intent.today, existing.installationId)
 }
 
 private fun evaluateCandidate(
-    readings: List<Reading>,
+    tracker: TrackerData,
     id: String,
     date: LocalDate?,
     meter: ParsedMeter,
     today: LocalDate,
+    installationId: String?,
 ): ReadingValidation {
-    val others = readings.filterNot { it.id == id }
-    val dateError = validateReadingDate(readings, id, date, today)
+    val others = tracker.readings.filter { it.id != id && it.installationId == installationId }
+    val dateError = validateReadingDate(tracker, id, date, today)
     val value = (meter as? ParsedMeter.Value)?.cubicMetres
     val valueError = when {
         meter == ParsedMeter.Required -> ReadingError.VALUE_REQUIRED
@@ -67,5 +90,5 @@ private fun evaluateCandidate(
     }
     val errors = ReadingErrors(dateError, valueError)
     if (!errors.isEmpty) return ReadingValidation.Rejected(errors)
-    return ReadingValidation.Accepted(Reading(id, checkNotNull(date), checkNotNull(value)))
+    return ReadingValidation.Accepted(Reading(id, checkNotNull(date), checkNotNull(value), checkNotNull(installationId)))
 }

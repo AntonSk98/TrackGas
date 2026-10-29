@@ -7,6 +7,10 @@ import com.trackgas.app.tracking.Dashboard
 import com.trackgas.app.tracking.DateRange
 import com.trackgas.app.tracking.PeriodType
 import com.trackgas.app.tracking.Reading
+import com.trackgas.app.tracking.MeterInstallation
+import com.trackgas.app.tracking.MeterReplacement
+import com.trackgas.app.tracking.ORIGINAL_INSTALLATION_ID
+import com.trackgas.app.tracking.TrackerData
 import com.trackgas.app.tracking.chartAmountText
 import com.trackgas.app.tracking.chartAxisText
 import com.trackgas.app.tracking.chartProjection
@@ -209,6 +213,118 @@ class ChartProjectionTest {
         // Vico measures minimum, midpoint, and maximum even when only one tick is drawn.
         listOf(0.0, 0.5, 1.0).forEach { value ->
             assertEquals("0", chartAxisText(projected, value, Locale.GERMANY))
+        }
+    }
+
+    private fun replacementTracker(date: String, next: String? = "16", gap: Long = 3): TrackerData {
+        val boundary = LocalDate.parse(date)
+        val final = Reading("old-final", boundary, BigDecimal("1105"))
+        val initial = Reading("new-initial", boundary, BigDecimal("10.0000"), "new")
+        return TrackerData(
+            listOf(Reading("old-first", boundary.minusDays(1), BigDecimal("1100")), final, initial) +
+                listOfNotNull(next?.let { Reading("new-next", boundary.plusDays(gap), BigDecimal(it), "new") }),
+            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", boundary)),
+            listOf(MeterReplacement("replacement", boundary, ORIGINAL_INSTALLATION_ID, "new", final.id, initial.id)),
+        )
+    }
+
+    private fun assertAuthoritativeBuckets(tracker: TrackerData, period: CalendarPeriod, expectedTotal: String) {
+        val data = dashboard(tracker, period)
+        val projected = chartProjection(period, data)
+        assertEquals(BigDecimal(expectedTotal), data.total.cubicMetres)
+        assertEquals(data.buckets.size, projected.entries.size)
+        data.buckets.zip(projected.entries).forEach { (bucket, entry) ->
+            assertEquals(bucket.range, entry.range)
+            assertSame(bucket.amount.cubicMetres, entry.cubicMetres)
+            assertEquals(bucket.amount.cubicMetres!!.signum() == 0, entry.isZero)
+        }
+    }
+
+    @Test fun replacementBarsFollowCoveredBucketsAcrossWeekMonthAndYearBoundaries() {
+        for ((type, date) in listOf(
+            PeriodType.WEEK to "2026-11-01",
+            PeriodType.MONTH to "2026-10-31",
+            PeriodType.YEAR to "2026-12-31",
+        )) {
+            val tracker = replacementTracker(date)
+            val boundary = LocalDate.parse(date)
+            val oldPeriod = CalendarPeriod.containing(type, boundary)
+            val newPeriod = CalendarPeriod.containing(type, boundary.plusDays(1))
+            assertAuthoritativeBuckets(tracker, oldPeriod, "5")
+            assertAuthoritativeBuckets(tracker, newPeriod, "6.0000")
+            val old = chartProjection(oldPeriod, dashboard(tracker, oldPeriod))
+            val new = chartProjection(newPeriod, dashboard(tracker, newPeriod))
+            assertEquals(old.positionCount - 1, old.entries.single().offset)
+            assertEquals(if (type == PeriodType.YEAR) listOf(0) else listOf(0, 1, 2), new.entries.map { it.offset })
+            assertTrue(new.entries.all { !it.isZero })
+        }
+    }
+
+    @Test fun agreedReplacementExampleProducesOnlyFiveAndThreeBarsAndTotalEight() {
+        val source = replacementTracker("2026-10-28", "13.0000", 1)
+        val data = dashboard(source, october)
+        val chart = chartProjection(october, data)
+        assertEquals(listOf(27, 28), chart.entries.map { it.offset })
+        assertEquals(listOf(BigDecimal("5"), BigDecimal("3.0000")), chart.entries.map { it.cubicMetres })
+        assertAuthoritativeBuckets(source, october, "8.0000")
+        assertAuthoritativeBuckets(source, year, "8.0000")
+    }
+
+    @Test fun baselineOnlyHasNoNewMarkButEqualSubsequentReadingHasKnownZeroMark() {
+        val source = replacementTracker("2026-10-28", null)
+        val before = chartProjection(october, dashboard(source, october))
+        assertEquals(listOf(27), before.entries.map { it.offset })
+        val initial = source.readings.single { it.id == "new-initial" }
+        val tracker = source.copy(readings = source.readings + initial.copy(id = "zero-next", date = initial.date.plusDays(1)))
+        val after = chartProjection(october, dashboard(tracker, october))
+        assertEquals(listOf(27, 28), after.entries.map { it.offset })
+        assertTrue(after.entries.last().isZero)
+        assertEquals(0.0, after.entries.last().normalizedY, 0.0)
+        assertFalse(after.entries.first().isZero)
+        assertAuthoritativeBuckets(tracker, october, "5.0000")
+    }
+
+    @Test fun replacementThirdsKeepIndependentExactTotalsAndOriginalBucketPrecision() {
+        val source = replacementTracker("2026-10-04", "11.0000")
+        val tracker = source.copy(readings = source.readings.map {
+            when (it.id) {
+                "old-first" -> it.copy(date = LocalDate.parse("2026-10-01"))
+                "old-final" -> it.copy(cubicMetres = BigDecimal("1101.0000"))
+                else -> it
+            }
+        })
+        assertAuthoritativeBuckets(tracker, october, "2.0000")
+        assertAuthoritativeBuckets(tracker, year, "2.0000")
+        val data = dashboard(tracker, october)
+        val projected = chartProjection(october, data)
+        assertEquals((1..6).toList(), projected.entries.map { it.offset })
+        assertTrue(projected.entries.all {
+            it.cubicMetres == BigDecimal("0.3333333333333333333333333333333333")
+        })
+        assertNotEquals(data.total.cubicMetres, projected.entries.fold(BigDecimal.ZERO) { sum, entry -> sum + entry.cubicMetres })
+    }
+
+    @Test fun boundaryCorrectionsAndOrdinaryDeletionRefreshMarksWithoutJoiningMeters() {
+        val source = replacementTracker("2026-10-28", "13.0000", 1)
+        val before = chartProjection(october, dashboard(source, october))
+        val corrected = source.copy(readings = source.readings.map {
+            when (it.id) {
+                "old-final" -> it.copy(cubicMetres = BigDecimal("1106"))
+                "new-initial" -> it.copy(cubicMetres = BigDecimal("11.0000"))
+                else -> it
+            }
+        })
+        val edited = chartProjection(october, dashboard(corrected, october))
+        assertEquals(listOf(BigDecimal("6"), BigDecimal("2.0000")), edited.entries.map { it.cubicMetres })
+        assertEquals(listOf(BigDecimal("5"), BigDecimal("3.0000")), before.entries.map { it.cubicMetres })
+        assertAuthoritativeBuckets(corrected, october, "8.0000")
+        val deleted = corrected.copy(readings = corrected.readings.filterNot { it.id == "new-next" })
+        assertEquals(listOf(27), chartProjection(october, dashboard(deleted, october)).entries.map { it.offset })
+        assertAuthoritativeBuckets(deleted, october, "6")
+        for (endpoint in listOf("old-final", "new-initial")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                chartProjection(october, dashboard(source.copy(readings = source.readings.filterNot { it.id == endpoint }), october))
+            }
         }
     }
 }

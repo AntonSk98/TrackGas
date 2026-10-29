@@ -52,6 +52,7 @@ internal fun ReadingForm(
     onClearError: () -> Unit,
     onSave: (LocalDate?, String) -> Unit,
     onDismiss: () -> Unit,
+    tracker: TrackerData = TrackerData(readings),
 ) {
     val reading = (dialog.target as? ReadingTarget.Edit)?.reading
     val initialDate = when (val target = dialog.target) {
@@ -92,7 +93,7 @@ internal fun ReadingForm(
     )
     if (reading == null && showPicker) {
         AddReadingDatePicker(
-            date, today, readings,
+            date, today, tracker,
             onDismiss = { draft.choosingDate = false; draft.duplicateDismissed = true },
             onConfirm = {
                 draft.dateIso = it.toString()
@@ -109,7 +110,7 @@ internal fun ReadingForm(
 private fun AddReadingDatePicker(
     date: LocalDate,
     today: LocalDate,
-    readings: List<Reading>,
+    tracker: TrackerData,
     onDismiss: () -> Unit,
     onConfirm: (LocalDate) -> Unit,
 ) {
@@ -123,7 +124,7 @@ private fun AddReadingDatePicker(
         },
     )
     val pickerDateError = picker.selectedDateMillis?.let {
-        validateReadingDate(readings, null, pickerDate(it), today)
+        validateReadingDate(tracker, null, pickerDate(it), today)
     }
     DatePickerDialog(
         onDismissRequest = onDismiss,
