@@ -62,11 +62,16 @@ class RoomReadingRepositoryTest {
 
         val purged = repository.purge()
         assertTrue(purged.revision > populated.revision)
-        assertEquals(TrackerData(), purged.tracker)
-        assertEquals(TrackerData(), repository.observeReadings().first().tracker)
+        assertTrue(purged.readings.isEmpty())
+        assertTrue(purged.tracker.replacements.isEmpty())
+        val fresh = purged.tracker.currentInstallation.id
+        assertEquals(fresh, java.util.UUID.fromString(fresh).toString())
+        assertTrue(populated.tracker.installations.none { it.id == fresh })
+        assertEquals(purged.tracker, repository.observeReadings().first().tracker)
         val repeated = repository.purge()
         assertTrue(repeated.revision > purged.revision)
-        assertEquals(TrackerData(), repeated.tracker)
+        assertNotEquals(fresh, repeated.tracker.currentInstallation.id)
+        assertTrue(repeated.readings.isEmpty())
     }
 
     @Test
@@ -119,7 +124,8 @@ class RoomReadingRepositoryTest {
 
     @Test
     fun purgeRejectsMalformedStoredDataWithoutDeletingIt() = runBlocking {
-        val malformed = ReadingEntity("bad", "2026-10-01", "not-a-number")
+        val root = database.readings().getInstallations().single()
+        val malformed = ReadingEntity("bad", "2026-10-01", "not-a-number", root.id)
         database.readings().insert(malformed)
         try {
             repository.purge()
@@ -128,7 +134,7 @@ class RoomReadingRepositoryTest {
             assertEquals(ReadingFailureCategory.STORED_DATA, error.category)
         }
         assertEquals(listOf(malformed), database.readings().getAll())
-        assertEquals(listOf(InstallationEntity(ORIGINAL_INSTALLATION_ID)), database.readings().getInstallations())
+        assertEquals(listOf(root), database.readings().getInstallations())
     }
 
     @Test
@@ -192,7 +198,7 @@ class RoomReadingRepositoryTest {
         val original = (save("2026-10-01", "100.0100") as SaveReadingResult.Saved).snapshot.readings.single()
         save("2026-10-10", "101.0200", original.id)
         assertEquals(1, calls)
-        assertEquals(ReadingEntity("generated", "2026-10-01", "101.0200"), database.readings().getAll().single())
+        assertEquals(ReadingEntity("generated", "2026-10-01", "101.0200", original.installationId), database.readings().getAll().single())
     }
 
     @Test
@@ -208,7 +214,7 @@ class RoomReadingRepositoryTest {
 
     @Test
     fun malformedStoredValueIsReportedAsStorageFailure() = runBlocking {
-        database.readings().insert(ReadingEntity("bad", "2026-10-01", "not-a-number"))
+        database.readings().insert(ReadingEntity("bad", "2026-10-01", "not-a-number", database.readings().getInstallations().single().id))
         try {
             repository.observeReadings().first()
             fail("Expected malformed data to fail loading")
@@ -220,11 +226,12 @@ class RoomReadingRepositoryTest {
 
     @Test
     fun malformedStoredFieldsFailLoadAndMutationsWithoutChangingAnyRows() = runBlocking {
+        val root = database.readings().getInstallations().single().id
         for (bad in listOf(
-            ReadingEntity("", "2026-10-01", "100"),
-            ReadingEntity("bad", "invalid-date", "100"),
-            ReadingEntity("bad", "2026-10-01", "NaN"),
-            ReadingEntity("bad", "2026-10-01", "-1"),
+            ReadingEntity("", "2026-10-01", "100", root),
+            ReadingEntity("bad", "invalid-date", "100", root),
+            ReadingEntity("bad", "2026-10-01", "NaN", root),
+            ReadingEntity("bad", "2026-10-01", "-1", root),
         )) {
             database.readings().insert(bad)
             val before = database.readings().getAll()
@@ -249,8 +256,9 @@ class RoomReadingRepositoryTest {
     @Test
     fun decreasingStoredCollectionFailsLoadSaveDeleteAndRetryWithoutChangingRows() = runBlocking {
         val dao = database.readings()
-        dao.insert(ReadingEntity("earlier", "2026-10-01", "120.0100"))
-        dao.insert(ReadingEntity("later", "2026-10-02", "100.0100"))
+        val root = dao.getInstallations().single().id
+        dao.insert(ReadingEntity("earlier", "2026-10-01", "120.0100", root))
+        dao.insert(ReadingEntity("later", "2026-10-02", "100.0100", root))
         val before = dao.getAll()
         var identityCalls = 0
         repository = RoomReadingRepository(database) { identityCalls++; "new" }
@@ -281,7 +289,7 @@ class RoomReadingRepositoryTest {
         }
         assertEquals(0, identityCalls)
         // Only the test repairs its fixture; failed operations must not issue revisions.
-        dao.update(ReadingEntity("later", "2026-10-02", "125.0100"))
+        dao.update(ReadingEntity("later", "2026-10-02", "125.0100", root))
         val firstValid = repository.observeReadings().first()
         assertEquals(1L, firstValid.revision)
         assertEquals(2, firstValid.readings.size)

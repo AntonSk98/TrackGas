@@ -21,8 +21,8 @@ class ReadingMigrationTest {
         for (populated in listOf(false, true)) {
             val name = "migration-${UUID.randomUUID()}.db"
             val rows = if (populated) listOf(
-                ReadingEntity("first-original-id", "2026-10-27", "1100.0000"),
-                ReadingEntity("final-original-id", "2026-10-28", "1105.0012300"),
+                ReadingEntity("first-original-id", "2026-10-27", "1100.0000", ORIGINAL_INSTALLATION_ID),
+                ReadingEntity("final-original-id", "2026-10-28", "1105.0012300", ORIGINAL_INSTALLATION_ID),
             ) else emptyList()
             val file = context.getDatabasePath(name)
             file.parentFile!!.mkdirs()
@@ -54,7 +54,7 @@ class ReadingMigrationTest {
                 }
                 if (populated) {
                     try {
-                        database.readings().insert(ReadingEntity("duplicate", rows.first().date, "1"))
+                        database.readings().insert(ReadingEntity("duplicate", rows.first().date, "1", ORIGINAL_INSTALLATION_ID))
                         fail("Expected migrated composite uniqueness")
                     } catch (_: SQLiteConstraintException) { }
                 }

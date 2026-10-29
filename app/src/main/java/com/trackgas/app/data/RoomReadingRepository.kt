@@ -103,12 +103,14 @@ class RoomReadingRepository internal constructor(
     override suspend fun purge(): CommittedSnapshot = readingStorageOperation {
         ordering.withLock {
             val tracker = database.withTransaction {
-                readRows()
+                val before = readRows()
                 // Remove dependent rows first and restore the required original installation.
                 dao.deleteReplacements()
                 dao.deleteReadings()
                 dao.deleteInstallations()
-                dao.insertInstallation(InstallationEntity(ORIGINAL_INSTALLATION_ID))
+                var id: String
+                do { id = UUID.randomUUID().toString() } while (before.installations.any { it.id == id })
+                dao.insertInstallation(InstallationEntity(id))
                 readRows()
             }
             snapshot(tracker)

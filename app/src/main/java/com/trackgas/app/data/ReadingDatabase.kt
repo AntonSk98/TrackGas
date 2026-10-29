@@ -16,6 +16,7 @@ import com.trackgas.app.tracking.*
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
+import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "installations")
@@ -31,7 +32,7 @@ data class ReadingEntity(
     @PrimaryKey val id: String,
     val date: String,
     val cubicMetres: String,
-    val installationId: String = ORIGINAL_INSTALLATION_ID,
+    val installationId: String,
 )
 
 @Entity(
@@ -133,7 +134,7 @@ abstract class ReadingDatabase : RoomDatabase() {
     companion object {
         val INITIALIZE = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
-                db.execSQL("INSERT INTO installations (id, startDate) VALUES ('original', NULL)")
+                db.execSQL("INSERT INTO installations (id, startDate) VALUES (?, NULL)", arrayOf(UUID.randomUUID().toString()))
             }
         }
 

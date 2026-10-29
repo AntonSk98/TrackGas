@@ -34,6 +34,52 @@ class TrackerViewModelTest {
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
     @After fun tearDown() = Dispatchers.resetMain()
 
+    @Test fun exportRetainsFrozenCommittedSnapshotAndRejectsStaleRequests() = runTest {
+        val repo = ScriptedReadingRepository()
+        val store = ViewModelStore()
+        val factory = TrackerViewModel.factory(repo)
+        try {
+            val vm = ViewModelProvider(store, factory)[TrackerViewModel::class.java]
+            assertNull(vm.requestExport())
+            repo.deliver(listOf(one, two), 1); runCurrent()
+            val request = requireNotNull(vm.requestExport())
+            assertNull(vm.requestExport())
+            repo.deliver(listOf(one.copy(cubicMetres = "101.00".toBigDecimal())), 2); runCurrent()
+            assertSame(vm, ViewModelProvider(store, factory)[TrackerViewModel::class.java])
+            vm.cancelExport("stale")
+            assertNull(vm.beginExportWrite("stale"))
+            val snapshot = requireNotNull(vm.beginExportWrite(request))
+            assertEquals(listOf(one, two), snapshot.readings)
+            vm.openPurge(); vm.purge(); runCurrent()
+            repo.purgeOutcomes.send(Result.success(CommittedSnapshot(3, TrackerData()))); runCurrent()
+            assertEquals(TrackerData(), vm.state.tracker)
+            assertEquals(listOf(one, two), snapshot.readings)
+            assertNull(vm.beginExportWrite(request))
+            vm.finishExportWrite("stale", true)
+            assertTrue(vm.state.export is ExportState.Writing)
+            vm.finishExportWrite(request, true)
+            vm.finishExportWrite(request, false)
+            assertEquals(ExportState.Complete(request, true), vm.state.export)
+            vm.acknowledgeExport("stale")
+            assertEquals(ExportState.Complete(request, true), vm.state.export)
+            vm.acknowledgeExport(request)
+            assertEquals(ExportState.Idle, vm.state.export)
+            assertNotNull(vm.requestExport())
+        } finally {
+            store.clear()
+        }
+
+        @Test fun cancelledExportProducesNoCompletionAndAllowsRetry() = runTest {
+            val repo = ScriptedReadingRepository()
+            val vm = TrackerViewModel(repo) { today }
+            repo.deliver(TrackerData()); runCurrent()
+            val request = requireNotNull(vm.requestExport())
+            vm.cancelExport(request)
+            assertEquals(ExportState.Idle, vm.state.export)
+            assertNotNull(vm.requestExport())
+        }
+    }
+
     @Test fun transitionIdentityRejectsStaleSessionDialogRequestAndWrongAction() {
         val request = ReadingRequest("session", "dialog", "request")
         val editing = ReadingDialog.Editing("dialog", ReadingTarget.Add(today), SavePhase.Pending("request"))

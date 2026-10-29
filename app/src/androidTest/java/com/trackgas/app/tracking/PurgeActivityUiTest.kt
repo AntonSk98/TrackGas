@@ -75,26 +75,28 @@ class PurgeActivityUiTest {
             assertEquals(original, tracker.state.tracker)
             openPurge()
             rule.onNodeWithText(text(R.string.purge_all_data)).performClick()
-            rule.waitUntil(10_000) { tracker.state.dialog == ReadingDialog.Closed && tracker.state.tracker == TrackerData() }
+            rule.waitUntil(10_000) { tracker.state.dialog == ReadingDialog.Closed && tracker.state.readings.isEmpty() }
+            val purged = tracker.state.tracker
+            assertTrue(original.installations.none { it.id == purged.currentInstallation.id })
             rule.onNodeWithText(text(R.string.no_readings)).performScrollTo().assertIsDisplayed()
             assertEquals(TrackerTab.HISTORY, tracker.state.tab)
             assertEquals(period, tracker.state.period)
             rule.onNodeWithText(text(R.string.dashboard_tab)).performClick()
             rule.onNodeWithText(text(R.string.no_consumption)).performScrollTo().assertIsDisplayed()
             rule.activityRule.scenario.recreate()
-            rule.waitUntil(10_000) { tracker.state.tracker == TrackerData() }
+            rule.waitUntil(10_000) { tracker.state.tracker == purged }
 
             rule.runOnIdle { app.trackerStoreOwner.obtain(id, taskId, setOf(taskId)).clear() }
             database.close()
             database = open()
             repository = RoomReadingRepository(database)
             installTracker()
-            assertEquals(TrackerData(), tracker.state.tracker)
+            assertEquals(purged, tracker.state.tracker)
             rule.onNodeWithContentDescription(text(R.string.add_reading)).performClick()
             rule.onNode(hasSetTextAction() and hasText(text(R.string.value_label))).performTextInput("1")
             rule.onNodeWithText(text(R.string.save)).performClick()
             rule.waitUntil(10_000) { tracker.state.dialog == ReadingDialog.Closed && tracker.state.readings.size == 1 }
-            assertEquals(ORIGINAL_INSTALLATION_ID, tracker.state.readings.single().installationId)
+            assertEquals(purged.currentInstallation.id, tracker.state.readings.single().installationId)
             assertNull(tracker.state.dashboard.total.cubicMetres)
         } finally {
             rule.runOnIdle { if (id.isNotEmpty()) app.trackerStoreOwner.release(id) }

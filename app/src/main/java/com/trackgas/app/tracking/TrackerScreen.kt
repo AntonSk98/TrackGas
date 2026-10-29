@@ -12,6 +12,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -23,14 +26,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.Dialog
 import com.trackgas.app.R
 import java.time.LocalDate
 import java.util.Locale
@@ -56,6 +62,8 @@ fun TrackerScreen(
     onReplaceMeter: () -> Unit = {},
     onOpenPurge: () -> Unit,
     onPurge: () -> Unit,
+    onExport: () -> Unit = {},
+    onAcknowledgeExport: (String) -> Unit = {},
 ) {
     val locale = LocalConfiguration.current.locales[0]
     val ready = state.loadState == ReadingLoadState.READY
@@ -92,6 +100,20 @@ fun TrackerScreen(
                             tonalElevation = 0.dp,
                             shadowElevation = 4.dp,
                         ) {
+                            DropdownMenuItem(
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                                text = { Text(stringResource(R.string.export_csv), style = MaterialTheme.typography.bodyLarge) },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_export),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                                enabled = state.export is ExportState.Idle,
+                                onClick = { optionsExpanded = false; onExport() },
+                            )
                             DropdownMenuItem(
                                 modifier = Modifier.padding(horizontal = 4.dp),
                                 text = {
@@ -148,6 +170,31 @@ fun TrackerScreen(
                 historyItems(state.readings, locale, onEdit = onOpenEdit, onDelete = onOpenDelete, tracker = state.tracker)
             }
         }
+    }
+    val export = state.export
+    if (export is ExportState.Complete && export.succeeded) {
+        Dialog(onDismissRequest = { onAcknowledgeExport(export.requestId) }) {
+            Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                Box(modifier = Modifier.padding(32.dp), contentAlignment = Alignment.Center) {
+                    Icon(
+                        painterResource(R.drawable.ic_success),
+                        contentDescription = stringResource(R.string.export_success),
+                        modifier = Modifier.size(48.dp).testTag("export-success-icon"),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    } else if (export is ExportState.Complete) {
+        AlertDialog(
+            onDismissRequest = { onAcknowledgeExport(export.requestId) },
+            text = { Text(stringResource(R.string.export_failure)) },
+            confirmButton = {
+                TextButton(onClick = { onAcknowledgeExport(export.requestId) }) {
+                    Text(stringResource(R.string.ok))
+                }
+            },
+        )
     }
     when (val dialog = state.dialog) {
         ReadingDialog.Closed -> Unit

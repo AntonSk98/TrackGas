@@ -152,7 +152,7 @@ class MeterReplacementUiTest {
             add().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
             assertTrue(options().fetchSemanticsNode().boundsInRoot.right <= add().fetchSemanticsNode().boundsInRoot.left)
             options().performClick()
-            rule.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).assertCountEquals(2)
+            rule.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).assertCountEquals(3)
             rule.onNodeWithText(text(R.string.replace_meter)).assertIsDisplayed()
             back()
             rule.onNodeWithText(text(R.string.replace_meter)).assertDoesNotExist()

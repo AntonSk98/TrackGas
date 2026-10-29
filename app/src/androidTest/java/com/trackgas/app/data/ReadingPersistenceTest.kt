@@ -20,6 +20,29 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ReadingPersistenceTest {
+    @Test fun newDatabasesHaveDistinctStableUuidRoots() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val names = List(2) { "identity-${UUID.randomUUID()}.db" }
+        try {
+            val ids = names.map { name ->
+                fun open() = Room.databaseBuilder(context, ReadingDatabase::class.java, name)
+                    .addMigrations(ReadingDatabase.MIGRATION_1_2)
+                    .addCallback(ReadingDatabase.INITIALIZE).build()
+                var database = open()
+                val first = database.readings().getInstallations().single().id
+                assertEquals(first, UUID.fromString(first).toString())
+                database.close()
+                database = open()
+                assertEquals(first, database.readings().getInstallations().single().id)
+                database.close()
+                first
+            }
+            assertNotEquals(ids[0], ids[1])
+        } finally {
+            names.forEach { context.deleteDatabase(it) }
+        }
+    }
+
     @Test fun purgedTrackerReopensEmptyAndSupportsNewUsageAndReplacement() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "purge-${UUID.randomUUID()}.db"
@@ -35,11 +58,13 @@ class ReadingPersistenceTest {
             add(date, "110")
             repository.replaceMeter(ReplaceMeterIntent(replacementTarget(repository.observeReadings().first().tracker, date), date))
             assertEquals(1, repository.observeReadings().first().tracker.replacements.size)
-            repository.purge()
+            val beforePurge = repository.observeReadings().first().tracker
+            val purged = repository.purge().tracker
+            assertTrue(beforePurge.installations.none { it.id == purged.currentInstallation.id })
             database.close()
             database = open()
             repository = RoomReadingRepository(database)
-            assertEquals(TrackerData(), repository.observeReadings().first().tracker)
+            assertEquals(purged, repository.observeReadings().first().tracker)
             val baseline = add(date, "1").snapshot.tracker
             assertTrue(readingIntervals(baseline).isEmpty())
             val nextDate = date.plusDays(1)
@@ -82,7 +107,8 @@ class ReadingPersistenceTest {
             repository = RoomReadingRepository(database)
             assertEquals(before, repository.observeReadings().first().tracker)
             assertEquals(boundary.newInstallationId, before.currentInstallation.id)
-            assertEquals(ORIGINAL_INSTALLATION_ID, before.readings.single { it.id == final.id }.installationId)
+            val root = before.installations.single { it.startDate == null }.id
+            assertEquals(root, before.readings.single { it.id == final.id }.installationId)
             assertEquals(DeleteReadingResult.Protected, repository.delete(final.id))
             assertEquals(DeleteReadingResult.Protected, repository.delete(boundary.initialReadingId))
             val edit = repository.save(SaveReadingIntent.Edit(boundary.initialReadingId, parseMeter("1.0000", Locale.US), today)) as SaveReadingResult.Saved
@@ -97,8 +123,8 @@ class ReadingPersistenceTest {
             assertEquals(corrected, reopened)
             assertEquals(before.installations, reopened.installations)
             assertEquals(before.replacements, reopened.replacements)
-            assertEquals(before.readings.filter { it.installationId == ORIGINAL_INSTALLATION_ID },
-                reopened.readings.filter { it.installationId == ORIGINAL_INSTALLATION_ID })
+            assertEquals(before.readings.filter { it.installationId == root },
+                reopened.readings.filter { it.installationId == root })
             assertEquals(listOf("5.0000", "4.0000"), readingIntervals(reopened).map { it.cubicMetres.toString() })
         } finally {
             database.close()

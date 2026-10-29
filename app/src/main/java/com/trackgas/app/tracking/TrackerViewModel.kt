@@ -6,14 +6,24 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import java.io.OutputStream
 import java.time.LocalDate
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class TrackerTab { DASHBOARD, HISTORY }
 enum class ReadingLoadState { LOADING, READY, ERROR }
+
+sealed interface ExportState {
+    data object Idle : ExportState
+    data class Selecting(val requestId: String, val tracker: TrackerData) : ExportState
+    data class Writing(val requestId: String, val tracker: TrackerData) : ExportState
+    data class Complete(val requestId: String, val succeeded: Boolean) : ExportState
+}
 
 data class TrackerState(
     val readings: List<Reading>,
@@ -25,6 +35,7 @@ data class TrackerState(
     val dialog: ReadingDialog = ReadingDialog.Closed,
     val sessionId: String = UUID.randomUUID().toString(),
     val tracker: TrackerData = TrackerData(readings),
+    val export: ExportState = ExportState.Idle,
 )
 
 /** Publishes projections only from committed repository snapshots. */
@@ -55,6 +66,48 @@ class TrackerViewModel(
 
     fun retryLoad() {
         if (state.loadState == ReadingLoadState.ERROR) observeReadings()
+    }
+
+    fun requestExport(): String? {
+        if (state.loadState != ReadingLoadState.READY || state.export !is ExportState.Idle) return null
+        val requestId = newId()
+        val tracker = state.tracker
+        state = state.copy(export = ExportState.Selecting(requestId, tracker.copy(
+            readings = tracker.readings.toList(),
+            installations = tracker.installations.toList(),
+            replacements = tracker.replacements.toList(),
+        )))
+        return requestId
+    }
+
+    fun cancelExport(requestId: String) {
+        val export = state.export as? ExportState.Selecting ?: return
+        if (export.requestId == requestId) state = state.copy(export = ExportState.Idle)
+    }
+
+    fun beginExportWrite(requestId: String): TrackerData? {
+        val export = state.export as? ExportState.Selecting ?: return null
+        if (export.requestId != requestId) return null
+        state = state.copy(export = ExportState.Writing(requestId, export.tracker))
+        return export.tracker
+    }
+
+    fun writeExport(requestId: String, open: () -> OutputStream?) {
+        val snapshot = beginExportWrite(requestId) ?: return
+        viewModelScope.launch {
+            val succeeded = withContext(Dispatchers.IO) { writeReadingCsv(snapshot, open) }
+            finishExportWrite(requestId, succeeded)
+        }
+    }
+
+    fun finishExportWrite(requestId: String, succeeded: Boolean) {
+        val export = state.export as? ExportState.Writing ?: return
+        if (export.requestId == requestId) state = state.copy(export = ExportState.Complete(requestId, succeeded))
+    }
+
+    fun acknowledgeExport(requestId: String) {
+        val export = state.export as? ExportState.Complete ?: return
+        if (export.requestId == requestId) state = state.copy(export = ExportState.Idle)
     }
 
     private fun observeReadings() {

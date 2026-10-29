@@ -5,6 +5,10 @@
     <string name="add_reading">Add reading</string>
     <string name="edit_reading">Edit reading</string>
     <string name="tracker_options">Tracker options</string>
+    <string name="export_csv">Export CSV</string>
+    <string name="export_success">Success</string>
+    <string name="export_failure">Could not export CSV. Try again.</string>
+    <string name="ok">OK</string>
     <string name="replace_meter">Replace meter</string>
     <string name="purge_tracking_data">Purge data</string>
     <string name="purge_confirmation">Delete all readings, meter history, and consumption? This cannot be undone.</string>

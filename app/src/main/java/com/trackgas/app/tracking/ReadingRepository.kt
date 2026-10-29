@@ -85,6 +85,6 @@ interface ReadingRepository {
     /** Atomically revalidates the expected final reading and starts the next installation at zero. */
     suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult
 
-    /** Removes all tracking history atomically and returns the committed empty original installation. */
+    /** Removes all tracking history atomically and returns an empty installation with a fresh identity. */
     suspend fun purge(): CommittedSnapshot
 }

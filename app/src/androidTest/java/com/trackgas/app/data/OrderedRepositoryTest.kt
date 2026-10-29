@@ -32,7 +32,7 @@ class OrderedRepositoryTest {
 
     @Test fun bufferedOldRoomPayloadIsOnlyATriggerForFreshLockedCapture() = runBlocking {
         val dao = database.readings()
-        val buffered = listOf(ReadingEntity("old", "2026-10-01", "100"))
+        val buffered = listOf(ReadingEntity("old", "2026-10-01", "100", dao.getInstallations().single().id))
         dao.insert(buffered.single())
         val triggers = Channel<List<ReadingEntity>>(Channel.UNLIMITED)
         val decorated = object : ReadingDao by dao {
@@ -56,7 +56,7 @@ class OrderedRepositoryTest {
 
     @Test fun captureStartedBeforeMutationKeepsLowerRevisionAndSerializesTheCommit() = runBlocking {
         val dao = database.readings()
-        dao.insert(ReadingEntity("old", "2026-10-01", "100"))
+        dao.insert(ReadingEntity("old", "2026-10-01", "100", dao.getInstallations().single().id))
         val captured = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var firstRead = true
@@ -120,7 +120,7 @@ class OrderedRepositoryTest {
     @Test fun cancellationInsideSaveOrDeleteTransactionRollsBackWithoutACommittedResult() = runBlocking {
         for (deleting in listOf(false, true)) {
             val dao = database.readings()
-            val row = ReadingEntity("existing", "2026-10-01", "100")
+            val row = ReadingEntity("existing", "2026-10-01", "100", dao.getInstallations().single().id)
             if (deleting) dao.insert(row)
             val entered = CompletableDeferred<Unit>()
             val decorated = object : ReadingDao by dao {
@@ -234,7 +234,8 @@ class OrderedRepositoryTest {
             triggers.send(payload)
             val fresh = withTimeout(5_000) { snapshots.receive() }
             assertTrue(old.revision < empty.revision && empty.revision < fresh.revision)
-            assertEquals(TrackerData(), empty.tracker)
+            assertTrue(empty.readings.isEmpty())
+            assertNotEquals(old.tracker.currentInstallation.id, empty.tracker.currentInstallation.id)
             assertEquals(empty.tracker, fresh.tracker)
         } finally { observation.cancelAndJoin() }
     }
@@ -283,17 +284,17 @@ class OrderedRepositoryTest {
         val edited = edit.await()
         val replaced = replacement.await()
         val addedDuringRace = add.await() as SaveReadingResult.Saved
-        assertEquals(TrackerData(), purged.tracker)
+        assertTrue(purged.readings.isEmpty())
         if (edited is SaveReadingResult.Saved) assertTrue(edited.snapshot.revision < purged.revision)
         else assertEquals(ReadingError.MISSING_READING, (edited as SaveReadingResult.Invalid).errors.value)
         if (replaced is ReplaceMeterResult.Replaced) assertTrue(replaced.snapshot.revision < purged.revision)
         else assertTrue(replaced is ReplaceMeterResult.Rejected)
         val latest = repository.observeReadings().first()
-        if (addedDuringRace.snapshot.revision < purged.revision) assertEquals(TrackerData(), latest.tracker)
+        if (addedDuringRace.snapshot.revision < purged.revision) assertEquals(purged.tracker, latest.tracker)
         else assertEquals(addedDuringRace.snapshot.tracker, latest.tracker)
         val added = repository.save(intent(25, "1100")) as SaveReadingResult.Saved
         assertTrue(added.snapshot.revision > purged.revision)
-        assertEquals(ORIGINAL_INSTALLATION_ID, added.snapshot.readings.single { it.date.dayOfMonth == 25 }.installationId)
+        assertEquals(purged.tracker.currentInstallation.id, added.snapshot.readings.single { it.date.dayOfMonth == 25 }.installationId)
         assertEquals(added.snapshot.tracker, repository.observeReadings().first().tracker)
     }
 
@@ -311,8 +312,8 @@ class OrderedRepositoryTest {
                 first.selectTab(TrackerTab.HISTORY)
                 first.selectPeriod(PeriodType.MONTH)
                 second.selectPeriod(PeriodType.YEAR)
-                repository.purge()
-                awaitState { first.state.tracker == TrackerData() && second.state.tracker == TrackerData() }
+                val purged = repository.purge().tracker
+                awaitState { first.state.tracker == purged && second.state.tracker == purged }
                 assertEquals(TrackerTab.HISTORY, first.state.tab)
                 assertEquals(PeriodType.MONTH, first.state.period.type)
                 assertEquals(PeriodType.YEAR, second.state.period.type)
@@ -397,7 +398,7 @@ class OrderedRepositoryTest {
         val added = (repository.save(staleDraft) as SaveReadingResult.Saved).snapshot
         assertEquals(committed.tracker.currentInstallation.id, added.readings.first().installationId)
         val historical = (repository.save(intent(24, "1099.0000")) as SaveReadingResult.Saved).snapshot
-        assertEquals(ORIGINAL_INSTALLATION_ID, historical.readings.single { it.date.dayOfMonth == 24 }.installationId)
+        assertEquals(committed.tracker.installations.single { it.startDate == null }.id, historical.readings.single { it.date.dayOfMonth == 24 }.installationId)
         assertEquals(ReadingError.DUPLICATE_DATE, (repository.save(intent(26, "1105")) as SaveReadingResult.Invalid).errors.date)
     }
 

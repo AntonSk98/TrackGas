@@ -66,7 +66,7 @@ Save still validates the complete draft and opens the picker if its date is a
 duplicate, without saving or losing your input.
 
 The **Tracker options** gear immediately left of Add on either tab offers
-**Replace meter** and **Purge data**. First save today's final old-meter reading through Add (or
+**Export CSV**, **Replace meter**, and **Purge data**. First save today's final old-meter reading through Add (or
 correct it in History). Open Replace meter to review today's read-only date and
 the saved final value, then choose **Confirm replacement**. There is no new-meter
 value to enter: confirmation automatically starts the new meter at zero on that
@@ -102,6 +102,38 @@ access on a compromised device. The selected tab and period survive rotation,
 but a fresh process opens Dashboard for the current Monday-to-Sunday week.
 Loading and storage errors are shown with retry; failed saves retain their draft
 and failed deletions and purges retain their confirmation. Drafts are not durable records.
+
+## Export readings
+
+Choose **Tracker options > Export CSV** on either tab, then select where to save
+the file. The export contains all committed readings at the moment you choose the
+action, regardless of the selected period. Later changes, including a purge, do
+not alter that snapshot. An empty tracker produces only the header.
+
+The file is UTF-8 CSV with semicolons and the header
+`meter_id;date;meter_value`. Dates use ISO `YYYY-MM-DD`; values are exact
+cumulative cubic metres with a dot decimal separator, no grouping, and preserved
+trailing zeros. Fields containing semicolons, quotes, or line breaks are quoted,
+with quotes doubled. `meter_id` is the stored installation ID, not the displayed
+meter number; each installation, including the first, has a persistent UUID.
+A purge creates a new UUID for the new empty tracker. This change targets fresh
+installs; uninstalling removes existing app data. Readings are ordered by
+date, then installation start order, so both same-day replacement endpoints are
+present, old meter first. Calculated consumption is not exported.
+
+```csv
+meter_id;date;meter_value
+11111111-1111-4111-8111-111111111111;2026-10-27;1099.500
+11111111-1111-4111-8111-111111111111;2026-10-28;1105.000
+22222222-2222-4222-8222-222222222222;2026-10-28;0
+22222222-2222-4222-8222-222222222222;2026-10-29;3.250
+```
+
+The destination is outside app-private storage and may be accessible to others
+depending on its location and sharing settings. A failed write can leave a partial
+file; choose a destination and try again. This is a readings export, not a complete
+restorable backup. The app does not import CSV files, and future import behavior
+is not yet defined.
 
 ## How consumption is calculated
 

@@ -2,6 +2,7 @@ package com.trackgas.app.tracking
 
 import java.time.LocalDate
 
+// Placeholder for list-only calculations and unloaded UI state, never a persisted installation.
 const val ORIGINAL_INSTALLATION_ID = "original"
 
 data class MeterInstallation(val id: String, val startDate: LocalDate? = null) {

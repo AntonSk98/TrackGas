@@ -35,8 +35,9 @@ class ReadingDatabaseTest {
     @Test
     fun orderedReadingsRetainIdentityDateAndExactDecimal() = runBlocking {
         val dao = database.readings()
-        val early = Reading("first", LocalDate.parse("2026-01-02"), BigDecimal("12345678901234567890.0012300"))
-        val later = Reading("second", LocalDate.parse("2026-02-03"), BigDecimal("12345678901234567891.000"))
+        val root = dao.getInstallations().single().id
+        val early = Reading("first", LocalDate.parse("2026-01-02"), BigDecimal("12345678901234567890.0012300"), root)
+        val later = Reading("second", LocalDate.parse("2026-02-03"), BigDecimal("12345678901234567891.000"), root)
         dao.insert(later.toEntity())
         dao.insert(early.toEntity())
 
@@ -46,9 +47,10 @@ class ReadingDatabaseTest {
     @Test
     fun dateMustBeUnique() = runBlocking {
         val dao = database.readings()
-        dao.insert(ReadingEntity("one", "2026-01-01", "1.0"))
+        val root = dao.getInstallations().single().id
+        dao.insert(ReadingEntity("one", "2026-01-01", "1.0", root))
         try {
-            dao.insert(ReadingEntity("two", "2026-01-01", "2.0"))
+            dao.insert(ReadingEntity("two", "2026-01-01", "2.0", root))
             fail("Expected the unique date constraint to reject the second reading")
         } catch (_: SQLiteConstraintException) {
             assertEquals(listOf("one"), dao.getAll().map { it.id })
@@ -58,11 +60,12 @@ class ReadingDatabaseTest {
     @Test
     fun installationDatesAndRestrictiveReferencesAreEnforced() = runBlocking {
         val dao = database.readings()
-        assertEquals(listOf(InstallationEntity("original")), dao.getInstallations())
+        val root = dao.getInstallations().single().id
+        assertEquals(root, java.util.UUID.fromString(root).toString())
         dao.insertInstallation(InstallationEntity("next", "2026-01-01"))
-        dao.insert(ReadingEntity("final", "2026-01-01", "1105"))
+        dao.insert(ReadingEntity("final", "2026-01-01", "1105", root))
         dao.insert(ReadingEntity("initial", "2026-01-01", "0.0000", "next"))
-        dao.insertReplacement(ReplacementEntity("replacement", "2026-01-01", "original", "next", "final", "initial"))
+        dao.insertReplacement(ReplacementEntity("replacement", "2026-01-01", root, "next", "final", "initial"))
         assertEquals(2, dao.getAll().size)
         for (operation in listOf<suspend () -> Unit>(
             { dao.insert(ReadingEntity("duplicate", "2026-01-01", "1", "next")) },
@@ -70,7 +73,7 @@ class ReadingDatabaseTest {
             { dao.delete("final") },
             { dao.delete("initial") },
             { database.openHelper.writableDatabase.execSQL("DELETE FROM installations WHERE id = 'next'") },
-            { dao.insertReplacement(ReplacementEntity("duplicate", "2026-01-01", "original", "next", "final", "initial")) },
+            { dao.insertReplacement(ReplacementEntity("duplicate", "2026-01-01", root, "next", "final", "initial")) },
         )) {
             try { operation(); fail("Expected restrictive constraint") } catch (_: SQLiteConstraintException) { }
         }
