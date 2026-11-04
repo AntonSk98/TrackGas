@@ -149,3 +149,10 @@ The app SHALL map stable internal error codes to short localized messages, inclu
 #### Scenario: Imported history predates a former replacement date
 - **WHEN** imported per-meter histories are valid but do not contain the tracker's former replacement date or endpoints
 - **THEN** import succeeds without requiring or inventing replacement-boundary readings
+
+### Requirement: Distinct CSV action icons
+The CSV menu SHALL use visually distinct directional icons: Export CSV depicts data moving up and out of a tray, and Import CSV depicts data moving down into a tray.
+
+#### Scenario: Distinguish CSV actions
+- **WHEN** the user opens Tracker options on Dashboard or History
+- **THEN** Export CSV shows an upward out-of-tray icon and Import CSV shows a downward into-tray icon

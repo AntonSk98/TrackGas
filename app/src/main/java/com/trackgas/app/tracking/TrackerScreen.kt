@@ -2,6 +2,7 @@ package com.trackgas.app.tracking
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -82,7 +83,20 @@ fun TrackerScreen(
         onSelectTab = onSelectTab,
         toolbar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge) },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_brand_mark),
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = Color.Unspecified,
+                        )
+                        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge)
+                    }
+                },
                 expandedHeight = 56.dp,
                 actions = {
                     Box {
