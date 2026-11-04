@@ -76,19 +76,12 @@ Run JVM tests with:
 .\gradlew.bat :app:testDebugUnitTest
 ```
 
-Instrumented tests require a connected Android device or emulator:
-
-```powershell
-.\gradlew.bat :app:connectedDebugAndroidTest
-```
-
 The debug APK is `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Project structure
 
 - `app/src/main/java`: Compose UI, ViewModel, tracker policies, and Room repository.
 - `app/src/test`: local JVM tests for parsing, validation, and calculations.
-- `app/src/androidTest`: Room, migration, Activity, and Compose integration tests.
 
 `MainActivity` hosts the app and delegates document-picker handling to
 `CsvDocumentPickerCoordinator`. `TrackerViewModel` owns screen/import state;
