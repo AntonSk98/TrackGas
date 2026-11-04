@@ -2,7 +2,9 @@ package com.trackgas.app.tracking
 
 import java.math.BigDecimal
 import java.math.MathContext
+import java.time.DayOfWeek
 import java.time.temporal.ChronoUnit
+import java.time.temporal.TemporalAdjusters
 
 internal data class ChartEntry(
     val range: DateRange,
@@ -22,6 +24,41 @@ internal data class ChartProjection(
     fun cubicMetresAt(normalizedY: Double): BigDecimal {
         require(normalizedY.isFinite() && normalizedY in 0.0..1.0)
         return scale.multiply(BigDecimal.valueOf(normalizedY))
+    }
+}
+
+/** Groups covered daily Month buckets into clipped Monday–Sunday display rows. */
+internal fun weeklyRows(period: CalendarPeriod, buckets: List<ConsumptionBucket>): List<ConsumptionBucket> {
+    require(period.type == PeriodType.MONTH) { "Weekly rows require a monthly period" }
+    val coveredBuckets = buckets.filter { it.amount.cubicMetres != null }
+    coveredBuckets.forEach { bucket ->
+        require(bucket.range.start == bucket.range.endInclusive && bucket.range.start in period.range.start..period.range.endInclusive) {
+            "Weekly rows require daily buckets inside the selected month"
+        }
+        require(bucket.amount.coveredDays == 1L && bucket.amount.totalDays == 1L) {
+            "Weekly rows require covered daily amounts"
+        }
+    }
+    require(coveredBuckets.map { it.range.start }.distinct().size == coveredBuckets.size) {
+        "Weekly rows cannot contain duplicate daily buckets"
+    }
+
+    return coveredBuckets.groupBy {
+        it.range.start.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+    }.toSortedMap().map { (monday, days) ->
+        val range = DateRange(maxOf(period.start, monday), minOf(period.range.endInclusive, monday.plusDays(6)))
+        val amount = days.fold(BigDecimal.ZERO) { sum, bucket ->
+            sum.add(requireNotNull(bucket.amount.cubicMetres))
+        }
+        ConsumptionBucket(
+            range,
+            ConsumptionAmount(
+                amount,
+                days.size.toLong(),
+                range.days,
+                days.any { it.amount.estimatedDistribution },
+            ),
+        )
     }
 }
 

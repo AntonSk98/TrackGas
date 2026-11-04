@@ -56,15 +56,23 @@ The dashboard SHALL show no consumption total or series when no reading interval
 - **THEN** no consumption total or series is displayed, while the add action and period controls remain available on Dashboard and any existing reading remains available in History
 
 ### Requirement: Covered consumption rows
-The dashboard SHALL display only buckets with covered usage, including estimated allocations and known zero consumption. Entirely uncovered days or months SHALL be omitted rather than rendered as individual Unknown rows.
+The dashboard SHALL display only buckets with covered usage, including estimated allocations and known zero consumption. Week views SHALL list covered days and Year views SHALL list covered months. Month views SHALL instead list one row per calendar week (Monday–Sunday, clipped to the selected month) containing at least one covered day, labelled with its date range and showing the sum of its covered days. Entirely uncovered days, weeks, or months SHALL be omitted rather than rendered as Unknown rows.
 
 #### Scenario: Unknown days differ from zero usage
 - **WHEN** readings of 100 on October 1 and 100 on October 2 are the only readings
-- **THEN** October 2 shows known zero consumption, October 1 and dates after October 2 are omitted from the consumption rows rather than shown as Unknown or zero, and the total is zero without a coverage-count label
+- **THEN** the October weekly row covering October 1–4 shows zero consumption without Unknown labels, weeks with no covered days are omitted, and the total is zero without a coverage-count label
 
 #### Scenario: Compact monthly and yearly consumption
 - **WHEN** readings of 100 on October 1 and 112 on October 4 are the only readings
-- **THEN** the October dashboard displays only October 2, 3, and 4, each with 4 cubic metres, and the yearly dashboard displays only October with 12 cubic metres, without estimation labels or coverage counts
+- **THEN** the October dashboard lists a single week row (October 1–4, 2026 being Thursday–Sunday) of 12 cubic metres, and the yearly dashboard displays only October with 12 cubic metres, without estimation labels or coverage counts
+
+#### Scenario: Fully covered month is compact
+- **WHEN** all 31 days of a month are covered
+- **THEN** the list shows at most six week rows rather than 31 daily rows, the first and last rows are clipped to the month boundaries, and the week rows sum to the Consumption total
+
+#### Scenario: Partially covered week
+- **WHEN** only some days of a calendar week are covered
+- **THEN** its row shows the sum of the covered days only, with no value invented for uncovered days
 
 ### Requirement: Minimal consumption presentation
 Consumption content SHALL show dates or months, cubic-metre values, a total titled "Consumption", and a bar chart of the same covered buckets above the numeric list. It SHALL NOT show coverage counts, measured/estimated distribution labels, or allocation explanations. This presentation policy SHALL NOT change interval arithmetic, covered-date selection, or internal coverage/provenance metadata.
@@ -279,15 +287,15 @@ Dashboard SHALL place Weekly, Monthly, and Yearly selection in the normal conten
 - **THEN** no period controls appear on History, and returning to Dashboard restores its selected period and independent scroll position
 
 ### Requirement: Period consumption bar chart
-Dashboard SHALL display daily consumption bars for Week/Month and monthly bars for Year when covered usage exists. The chart SHALL use the same covered buckets as the numeric list, date-positioned within the selected range with a zero-based cubic-metre scale. Uncovered buckets SHALL have no plotted mark, not a zero value. Known zero SHALL remain identifiable. All covered values SHALL remain available in the list.
+Dashboard SHALL display daily consumption bars for Week/Month and monthly bars for Year when covered usage exists. The chart SHALL use the same covered days or months as the underlying consumption data, date-positioned within the selected range with a zero-based cubic-metre scale. Uncovered buckets SHALL have no plotted mark, not a zero value. Known zero SHALL remain identifiable. Week and Year lists SHALL expose all covered values; in Month the daily values SHALL remain available through the chart inspection tooltip and be summarized per week in the list.
 
 #### Scenario: Daily and monthly charts agree with values
 - **WHEN** readings are 1000 on October 1, 2026 and 1012 on October 4, 2026
-- **THEN** the October Month chart plots October 2, 3, and 4 at 4 cubic metres each, the Year chart plots October at 12 cubic metres, and their lists and Consumption totals agree
+- **THEN** the October Month chart plots October 2, 3, and 4 at 4 cubic metres each, the Year chart plots October at 12 cubic metres, and the weekly list row and Consumption totals agree
 
 #### Scenario: Missing coverage is not zero
 - **WHEN** only October 2 is covered with known zero usage
-- **THEN** October 2 has an identifiable zero mark and a numeric zero row, uncovered dates have no consumption marks or rows, and the Consumption total is zero
+- **THEN** October 2 has an identifiable zero mark, its week row shows zero, uncovered dates have no consumption marks, and the Consumption total is zero
 
 #### Scenario: Empty or baseline-only data
 - **WHEN** there are no readings, only one reading, or no interval overlapping the selected period
@@ -295,7 +303,7 @@ Dashboard SHALL display daily consumption bars for Week/Month and monthly bars f
 
 #### Scenario: Narrow monthly chart
 - **WHEN** all 31 days are covered in a Month view on a compact screen
-- **THEN** all covered marks fit without horizontal chart scrolling, date ticks remain readable without requiring every date label, and every value remains available in the scrollable list
+- **THEN** all covered marks fit without horizontal chart scrolling, date ticks remain readable without requiring every date label, and the week rows are available in the scrollable list
 
 #### Scenario: Update after reading changes
 - **WHEN** a valid reading is added, edited, or deleted
@@ -303,7 +311,7 @@ Dashboard SHALL display daily consumption bars for Week/Month and monthly bars f
 
 #### Scenario: Preserve precision and accessible values
 - **WHEN** an interval allocates 1 cubic metre over 3 days
-- **THEN** the Consumption total remains 1 cubic metre, the numeric list uses the existing localized display rounding, and dates and values remain accessible without relying on chart color or pixel heights
+- **THEN** the Consumption total remains 1 cubic metre, weekly sums are computed from unrounded daily amounts before localized display rounding, and dates and values remain accessible without relying on chart color or pixel heights
 
 ### Requirement: Inspect consumption bars
 Long-pressing a covered bar or known-zero mark SHALL show a tooltip at the chart top, clear of the finger, with its localized weekday (Week), two-digit day (Month), or month name (Year) and consumption in cubic metres. Values SHALL use original buckets and existing localized row rounding, never normalized coordinates. Ordinary swipes SHALL navigate pages, including over the chart. Inspection SHALL reset on release, cancellation, or new data/period snapshots.

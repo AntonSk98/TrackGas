@@ -34,7 +34,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * Builds Dashboard's period controls, total, and covered date/month rows.
+ * Builds Dashboard's period controls, total, and covered weekly, daily, or monthly rows.
  *
  * [dashboard] already omits uncovered buckets. Calculation provenance and coverage
  * metadata intentionally remain hidden; chart and rows share the same covered values.
@@ -122,12 +122,19 @@ internal fun LazyListScope.dashboardItems(
         }
     }
     if (dashboard.total.cubicMetres != null) {
-        items(dashboard.buckets, key = { "bucket-${it.range.start}" }) { bucket ->
+        val rows = if (period.type == PeriodType.MONTH) weeklyRows(period, dashboard.buckets) else dashboard.buckets
+        items(rows, key = {
+            if (period.type == PeriodType.MONTH) "week-${it.range.start}" else "bucket-${it.range.start}"
+        }) { bucket ->
             Column(
                 modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                val label = bucketText(bucket.range.start, period.type, locale)
+                val label = if (period.type == PeriodType.MONTH) {
+                    weeklyRowText(bucket.range, locale)
+                } else {
+                    bucketText(bucket.range.start, period.type, locale)
+                }
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -145,6 +152,19 @@ internal fun LazyListScope.dashboardItems(
             }
         }
     }
+}
+
+@Composable
+private fun weeklyRowText(range: DateRange, locale: Locale): String {
+    fun format(date: LocalDate): String {
+        val skeleton = if (date.year == range.start.year) "MMMd" else "yMMMd"
+        val pattern = DateFormat.getBestDateTimePattern(locale, skeleton)
+        return date.format(DateTimeFormatter.ofPattern(pattern, locale))
+    }
+
+    val start = format(range.start)
+    if (range.start == range.endInclusive) return start
+    return stringResource(R.string.period_range, start, format(range.endInclusive))
 }
 
 @Composable

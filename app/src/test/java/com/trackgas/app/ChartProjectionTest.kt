@@ -15,6 +15,7 @@ import com.trackgas.app.tracking.chartAmountText
 import com.trackgas.app.tracking.chartAxisText
 import com.trackgas.app.tracking.chartProjection
 import com.trackgas.app.tracking.dashboard
+import com.trackgas.app.tracking.weeklyRows
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.util.Locale
@@ -27,9 +28,9 @@ class ChartProjectionTest {
 
     private fun reading(date: String, value: String) = Reading(date, LocalDate.parse(date), BigDecimal(value))
 
-    private fun bucket(date: String, value: String): ConsumptionBucket {
+    private fun bucket(date: String, value: String, estimated: Boolean = false): ConsumptionBucket {
         val day = LocalDate.parse(date)
-        return ConsumptionBucket(DateRange(day, day), ConsumptionAmount(BigDecimal(value), 1, 1, false))
+        return ConsumptionBucket(DateRange(day, day), ConsumptionAmount(BigDecimal(value), 1, 1, estimated))
     }
 
     private fun snapshot(vararg buckets: ConsumptionBucket): Dashboard = Dashboard(
@@ -167,6 +168,73 @@ class ChartProjectionTest {
             assertEquals(BigDecimal("0.3333333333333333333333333333333333"), entry.cubicMetres)
         }
         assertNotEquals(data.total.cubicMetres, projected.entries.fold(BigDecimal.ZERO) { sum, entry -> sum + entry.cubicMetres })
+    }
+
+    @Test fun weeklyRowsPartitionFullyCoveredMonthAndPreserveUnroundedSums() {
+        val data = dashboard(
+            listOf(reading("2026-09-30", "0"), reading("2026-10-31", "31")),
+            october,
+        )
+        val rows = weeklyRows(october, data.buckets)
+
+        assertTrue(rows.size <= 6)
+        assertEquals(LocalDate.parse("2026-10-01"), rows.first().range.start)
+        assertEquals(LocalDate.parse("2026-10-31"), rows.last().range.endInclusive)
+        assertTrue(rows.all { it.range.days <= 7 })
+        assertEquals(31L, rows.sumOf { it.amount.coveredDays })
+        assertEquals(0, data.total.cubicMetres!!.compareTo(
+            rows.fold(BigDecimal.ZERO) { sum, row -> sum.add(requireNotNull(row.amount.cubicMetres)) },
+        ))
+        assertEquals(31, data.buckets.size)
+        assertEquals((0..30).toList(), chartProjection(october, data).entries.map { it.offset })
+        assertEquals(BigDecimal("31"), data.total.cubicMetres)
+
+        val precise = weeklyRows(
+            october,
+            listOf(bucket("2026-10-01", "1.2300"), bucket("2026-10-04", "2.00")),
+        )
+        assertEquals(BigDecimal("3.2300"), precise.single().amount.cubicMetres)
+    }
+
+    @Test fun weeklyRowsKeepPartialAndKnownZeroWeeksAndOmitUncoveredWeeks() {
+        val rows = weeklyRows(
+            october,
+            listOf(
+                bucket("2026-10-03", "1.25", estimated = true),
+                bucket("2026-10-04", "0"),
+                bucket("2026-10-12", "2.750"),
+            ),
+        )
+
+        assertEquals(2, rows.size)
+        assertEquals(DateRange(LocalDate.parse("2026-10-01"), LocalDate.parse("2026-10-04")), rows[0].range)
+        assertEquals(BigDecimal("1.25"), rows[0].amount.cubicMetres)
+        assertEquals(2L, rows[0].amount.coveredDays)
+        assertEquals(4L, rows[0].amount.totalDays)
+        assertTrue(rows[0].amount.estimatedDistribution)
+        assertEquals(DateRange(LocalDate.parse("2026-10-12"), LocalDate.parse("2026-10-18")), rows[1].range)
+        assertEquals(BigDecimal("2.750"), rows[1].amount.cubicMetres)
+        assertEquals(1L, rows[1].amount.coveredDays)
+        assertEquals(7L, rows[1].amount.totalDays)
+    }
+
+    @Test fun weeklyRowsClipMonthsStartingOnMondayOrSundayIncludingSingleDayTail() {
+        val mondayMonth = CalendarPeriod(PeriodType.MONTH, LocalDate.parse("2025-09-01"))
+        val mondayRows = weeklyRows(
+            mondayMonth,
+            listOf(bucket("2025-09-01", "1"), bucket("2025-09-30", "1")),
+        )
+        assertEquals(DateRange(LocalDate.parse("2025-09-01"), LocalDate.parse("2025-09-07")), mondayRows.first().range)
+        assertEquals(DateRange(LocalDate.parse("2025-09-29"), LocalDate.parse("2025-09-30")), mondayRows.last().range)
+
+        val sundayMonth = CalendarPeriod(PeriodType.MONTH, LocalDate.parse("2025-06-01"))
+        val sundayRows = weeklyRows(
+            sundayMonth,
+            listOf(bucket("2025-06-01", "1"), bucket("2025-06-30", "0")),
+        )
+        assertEquals(DateRange(LocalDate.parse("2025-06-01"), LocalDate.parse("2025-06-01")), sundayRows.first().range)
+        assertEquals(DateRange(LocalDate.parse("2025-06-30"), LocalDate.parse("2025-06-30")), sundayRows.last().range)
+        assertEquals(BigDecimal.ZERO, sundayRows.last().amount.cubicMetres)
     }
 
     @Test fun mutationAndPeriodSnapshotsNeverRetainOldValues() {

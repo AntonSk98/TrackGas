@@ -76,6 +76,20 @@ Run JVM tests with:
 .\gradlew.bat :app:testDebugUnitTest
 ```
 
+From Git Bash, use the Unix-style wrapper and paths:
+
+```bash
+export JAVA_HOME="$(cygpath -u "$USERPROFILE")/android studio/jbr"
+export ANDROID_HOME="$(cygpath -u "$LOCALAPPDATA")/Android/Sdk"
+./gradlew :app:assembleDebug
+```
+
+Run JVM tests from Git Bash with:
+
+```bash
+./gradlew :app:testDebugUnitTest
+```
+
 The debug APK is `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Project structure
