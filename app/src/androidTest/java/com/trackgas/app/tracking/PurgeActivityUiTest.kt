@@ -29,7 +29,8 @@ class PurgeActivityUiTest {
 
     @Test fun realActivityPurgesReplacementHistoryAndReopensForNewBaseline() {
         fun open() = Room.databaseBuilder(context, ReadingDatabase::class.java, name)
-            .addMigrations(ReadingDatabase.MIGRATION_1_2).addCallback(ReadingDatabase.INITIALIZE).build()
+            .addMigrations(ReadingDatabase.MIGRATION_1_2)
+            .addCallback(ReadingDatabase.INITIALIZE).build()
         var database = open()
         val today = LocalDate.now()
         var repository = RoomReadingRepository(database)

@@ -16,6 +16,40 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ReadingMigrationTest {
+    @Test fun v2ReplacementKeepsTheMeterWithTheLatestReadingCurrent() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "migration-v2-${UUID.randomUUID()}.db"
+        val date = "2026-10-28"
+        val file = context.getDatabasePath(name)
+        file.parentFile!!.mkdirs()
+        SQLiteDatabase.openOrCreateDatabase(file, null).use { legacy ->
+            legacy.execSQL("CREATE TABLE installations (id TEXT NOT NULL PRIMARY KEY, startDate TEXT)")
+            legacy.execSQL("INSERT INTO installations VALUES ('old', NULL)")
+            legacy.execSQL("INSERT INTO installations VALUES ('new', '$date')")
+            legacy.execSQL("CREATE TABLE readings (id TEXT NOT NULL PRIMARY KEY, date TEXT NOT NULL, cubicMetres TEXT NOT NULL, installationId TEXT NOT NULL, FOREIGN KEY(installationId) REFERENCES installations(id) ON UPDATE RESTRICT ON DELETE RESTRICT)")
+            legacy.execSQL("CREATE UNIQUE INDEX index_readings_installationId_date ON readings (installationId, date)")
+            legacy.execSQL("INSERT INTO readings VALUES ('final', '$date', '10', 'old')")
+            legacy.execSQL("INSERT INTO readings VALUES ('initial', '$date', '0', 'new')")
+            legacy.execSQL("CREATE TABLE replacements (id TEXT NOT NULL PRIMARY KEY, date TEXT NOT NULL, oldInstallationId TEXT NOT NULL, newInstallationId TEXT NOT NULL, finalReadingId TEXT NOT NULL, initialReadingId TEXT NOT NULL, FOREIGN KEY(oldInstallationId) REFERENCES installations(id) ON UPDATE RESTRICT ON DELETE RESTRICT, FOREIGN KEY(newInstallationId) REFERENCES installations(id) ON UPDATE RESTRICT ON DELETE RESTRICT, FOREIGN KEY(finalReadingId) REFERENCES readings(id) ON UPDATE RESTRICT ON DELETE RESTRICT, FOREIGN KEY(initialReadingId) REFERENCES readings(id) ON UPDATE RESTRICT ON DELETE RESTRICT)")
+            for (column in listOf("date", "oldInstallationId", "newInstallationId", "finalReadingId", "initialReadingId")) {
+                legacy.execSQL("CREATE UNIQUE INDEX index_replacements_$column ON replacements ($column)")
+            }
+            legacy.execSQL("INSERT INTO replacements VALUES ('replacement', '$date', 'old', 'new', 'final', 'initial')")
+            legacy.version = 2
+        }
+
+        val database = Room.databaseBuilder(context, ReadingDatabase::class.java, name)
+            .build()
+        try {
+            val tracker = RoomReadingRepository(database).observeReadings().first().tracker
+            assertEquals("new", tracker.currentInstallation.id)
+            assertEquals(2, database.openHelper.readableDatabase.version)
+        } finally {
+            database.close()
+            context.deleteDatabase(name)
+        }
+    }
+
     @Test fun emptyAndPopulatedV1UpgradePreserveExactRowsAndColdReopen() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         for (populated in listOf(false, true)) {

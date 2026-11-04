@@ -47,7 +47,8 @@ class ReadingPersistenceTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "purge-${UUID.randomUUID()}.db"
         fun open() = Room.databaseBuilder(context, ReadingDatabase::class.java, name)
-            .addMigrations(ReadingDatabase.MIGRATION_1_2).addCallback(ReadingDatabase.INITIALIZE).build()
+            .addMigrations(ReadingDatabase.MIGRATION_1_2)
+            .addCallback(ReadingDatabase.INITIALIZE).build()
         var database = open()
         try {
             var repository = RoomReadingRepository(database)
@@ -83,7 +84,8 @@ class ReadingPersistenceTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "replacement-${UUID.randomUUID()}.db"
         fun open() = Room.databaseBuilder(context, ReadingDatabase::class.java, name)
-            .addMigrations(ReadingDatabase.MIGRATION_1_2).addCallback(ReadingDatabase.INITIALIZE).build()
+            .addMigrations(ReadingDatabase.MIGRATION_1_2)
+            .addCallback(ReadingDatabase.INITIALIZE).build()
         var database = open()
         try {
             var repository = RoomReadingRepository(database)
@@ -137,7 +139,8 @@ class ReadingPersistenceTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "test-readings-${UUID.randomUUID()}.db"
         fun open() = Room.databaseBuilder(context, ReadingDatabase::class.java, name)
-            .addMigrations(ReadingDatabase.MIGRATION_1_2).addCallback(ReadingDatabase.INITIALIZE).build()
+            .addMigrations(ReadingDatabase.MIGRATION_1_2)
+            .addCallback(ReadingDatabase.INITIALIZE).build()
         var database = open()
         try {
             var repository = RoomReadingRepository(database)

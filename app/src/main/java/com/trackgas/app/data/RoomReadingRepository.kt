@@ -21,6 +21,8 @@ class RoomReadingRepository internal constructor(
 
     private val ordering = Mutex()
     private var revision = 0L
+    private var mutationRevision = 0L
+    private val consumedImportPreviews = mutableSetOf<String>()
 
     override fun observeReadings(): Flow<CommittedSnapshot> =
         dao.observeAll().map {
@@ -50,7 +52,10 @@ class RoomReadingRepository internal constructor(
             // withTransaction has returned successfully; only now issue a committed revision.
             when (result) {
                 is SaveRows.Invalid -> SaveReadingResult.Invalid(result.errors)
-                is SaveRows.Accepted -> SaveReadingResult.Saved(snapshot(result.readings))
+                is SaveRows.Accepted -> {
+                    mutationRevision++
+                    SaveReadingResult.Saved(snapshot(result.readings))
+                }
             }
         }
     }
@@ -75,7 +80,91 @@ class RoomReadingRepository internal constructor(
             }
             when (result) {
                 is ReplaceRows.Rejected -> ReplaceMeterResult.Rejected(result.error)
-                is ReplaceRows.Accepted -> ReplaceMeterResult.Replaced(snapshot(result.tracker))
+                is ReplaceRows.Accepted -> {
+                    mutationRevision++
+                    ReplaceMeterResult.Replaced(snapshot(result.tracker))
+                }
+            }
+        }
+    }
+
+    override suspend fun previewCsvImport(text: String): CsvImportPreviewResult = readingStorageOperation {
+        ordering.withLock {
+            val base = database.withTransaction { readRows() }
+            val baseSnapshot = snapshot(base)
+            when (val validation = validateReadingCsv(text, base.installations.map { it.id }.toSet())) {
+                is CsvReadingValidation.Invalid -> CsvImportPreviewResult.Rejected(validation.error)
+                is CsvReadingValidation.Valid -> {
+                    var previewId = 0
+                    val candidate = validateCsvImportCandidate(base, validation.rows) { "csv-preview-${previewId++}" }
+                    when (candidate) {
+                        is CsvImportCandidateValidation.Invalid -> CsvImportPreviewResult.Rejected(candidate.error)
+                        is CsvImportCandidateValidation.Valid -> {
+                            val included = validation.rows.map { it.installationId }.toSet()
+                            val changes = included.sorted().map { installationId ->
+                                CsvImportMeterChange(
+                                    installationId = installationId,
+                                    beforeReadingCount = base.readings.count { it.installationId == installationId },
+                                    afterReadingCount = candidate.tracker.readings.count { it.installationId == installationId },
+                                )
+                            }
+                            CsvImportPreviewResult.Ready(
+                                CsvImportPreview(
+                                    UUID.randomUUID().toString(), baseSnapshot.revision, changes,
+                                    mutationRevision, base, validation.rows,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override suspend fun confirmCsvImport(preview: CsvImportPreview): CsvImportCommitResult = readingStorageOperation {
+        ordering.withLock {
+            val result = database.withTransaction {
+                val current = readRows()
+                if (preview.previewId in consumedImportPreviews ||
+                    preview.baseMutationRevision != mutationRevision || current != preview.baseTracker
+                ) {
+                    ImportRows.Stale
+                } else {
+                    val usedIds = current.readings.mapTo(mutableSetOf()) { it.id }
+                    val candidate = validateCsvImportCandidate(current, preview.rows) {
+                        var id: String
+                        do { id = newIdentity() } while (id.isBlank() || !usedIds.add(id))
+                        id
+                    }
+                    when (candidate) {
+                        is CsvImportCandidateValidation.Invalid -> ImportRows.Rejected(candidate.error)
+                        is CsvImportCandidateValidation.Valid -> {
+                        val affected = preview.rows.map { it.installationId }.toSet()
+                        if (affected.isNotEmpty()) {
+                            // Remove links first, then rebuild only the imported meter records.
+                            dao.deleteReplacementsForInstallations(affected.toList())
+                            dao.deleteForInstallations(affected.toList())
+                            dao.deleteInstallationsById(affected.toList())
+                            candidate.tracker.installations.filter { it.id in affected }.forEach { installation ->
+                                dao.insertInstallation(InstallationEntity(
+                                    installation.id, installation.startDate?.toString(),
+                                ))
+                            }
+                            candidate.tracker.readings.filter { it.installationId in affected }.forEach { dao.insert(it.toEntity()) }
+                        }
+                            ImportRows.Accepted(readRows())
+                        }
+                    }
+                }
+            }
+            when (result) {
+                ImportRows.Stale -> CsvImportCommitResult.StalePreview
+                is ImportRows.Rejected -> CsvImportCommitResult.Rejected(result.error)
+                is ImportRows.Accepted -> {
+                    consumedImportPreviews += preview.previewId
+                    mutationRevision++
+                    CsvImportCommitResult.Committed(snapshot(result.tracker))
+                }
             }
         }
     }
@@ -95,7 +184,10 @@ class RoomReadingRepository internal constructor(
             when (result) {
                 DeleteRows.Missing -> DeleteReadingResult.Missing
                 DeleteRows.Protected -> DeleteReadingResult.Protected
-                is DeleteRows.Accepted -> DeleteReadingResult.Deleted(snapshot(result.tracker))
+                is DeleteRows.Accepted -> {
+                    mutationRevision++
+                    DeleteReadingResult.Deleted(snapshot(result.tracker))
+                }
             }
         }
     }
@@ -113,6 +205,7 @@ class RoomReadingRepository internal constructor(
                 dao.insertInstallation(InstallationEntity(id))
                 readRows()
             }
+            mutationRevision++
             snapshot(tracker)
         }
     }
@@ -142,5 +235,11 @@ class RoomReadingRepository internal constructor(
         data object Missing : DeleteRows
         data object Protected : DeleteRows
         data class Accepted(val tracker: TrackerData) : DeleteRows
+    }
+
+    private sealed interface ImportRows {
+        data object Stale : ImportRows
+        data class Rejected(val error: CsvImportError) : ImportRows
+        data class Accepted(val tracker: TrackerData) : ImportRows
     }
 }

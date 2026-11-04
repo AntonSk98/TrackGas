@@ -71,9 +71,8 @@ class ReadingCollectionTest {
         val boundary = tracker.replacements.single()
         val cases = listOf(
             tracker.copy(installations = emptyList()),
-            tracker.copy(installations = tracker.installations + MeterInstallation("disconnected")),
-            tracker.copy(replacements = emptyList()),
             tracker.copy(replacements = listOf(boundary.copy(newInstallationId = ORIGINAL_INSTALLATION_ID))),
+            tracker.copy(replacements = listOf(boundary.copy(oldInstallationId = "missing"))),
             tracker.copy(replacements = listOf(boundary.copy(finalReadingId = "missing"))),
             tracker.copy(replacements = listOf(boundary.copy(initialReadingId = first.id))),
             tracker.copy(replacements = listOf(boundary.copy(date = last.date.plusDays(1)))),
@@ -87,7 +86,30 @@ class ReadingCollectionTest {
         cases.forEach { assertNotNull(readingCollectionViolation(it)) }
     }
 
-    @Test fun chainHasExactlyOneTerminalAndStrictlyIncreasingBoundaries() {
+    @Test fun independentRootsAreValidAndCurrentInstallationUsesLatestStartDate() {
+        val tracker = replaced().copy(replacements = emptyList())
+        assertNull(readingCollectionViolation(tracker))
+        assertEquals("new", tracker.currentInstallation.id)
+        assertEquals(1, readingIntervals(tracker).size)
+    }
+
+    @Test fun latestReadingDateWinsAndCurrentMarkerBreaksTies() {
+        val date = last.date
+        val old = MeterInstallation("old")
+        val laterStarted = MeterInstallation("later-started", date.minusDays(2))
+        val tracker = TrackerData(
+            readings = listOf(
+                Reading("old-latest", date, "10".toBigDecimal(), old.id),
+                Reading("later-earlier", date.minusDays(1), "5".toBigDecimal(), laterStarted.id),
+            ),
+            installations = listOf(old, laterStarted),
+        )
+        assertEquals("old", tracker.currentInstallation.id)
+        val tied = tracker.copy(readings = tracker.readings + Reading("later-tie", date, "6".toBigDecimal(), laterStarted.id))
+        assertEquals(laterStarted.id, tied.currentInstallation.id)
+    }
+
+    @Test fun replacementComponentsRemainStrictlyOrderedAlongsideIndependentRoots() {
         val tracker = replaced()
         val final = Reading("second-final", last.date.plusDays(1), "2".toBigDecimal(), "new")
         val initial = Reading("second-initial", final.date, "10".toBigDecimal(), "third")
@@ -99,6 +121,10 @@ class ReadingCollectionTest {
         )
         assertNull(readingCollectionViolation(chain))
         assertEquals("third", chain.currentInstallation.id)
+        val independent = chain.copy(
+            installations = chain.installations + MeterInstallation("independent", last.date.plusDays(2)),
+        )
+        assertNull(readingCollectionViolation(independent))
         assertNotNull(readingCollectionViolation(chain.copy(replacements = chain.replacements + second.copy(id = "fork"))))
         assertNotNull(readingCollectionViolation(chain.copy(replacements = listOf(chain.replacements[0], second.copy(date = last.date)))))
     }

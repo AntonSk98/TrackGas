@@ -72,8 +72,80 @@ Success SHALL appear in a dismissible window with a success icon and no confirma
 - **THEN** the operation is not duplicated and its completion or failure is presented once
 
 ### Requirement: Explain CSV scope
-The app documentation SHALL describe the columns, units, delimiter, decimal and date formats, meter ID meaning, and the inclusion of replacement endpoints. It SHALL explain that the file is a readings export rather than a complete restorable app backup and that import is not provided by this feature.
+The app documentation SHALL describe the columns, units, delimiter, decimal and date formats, meter ID meaning, and the inclusion of replacement endpoints. It SHALL explain that CSV contains readings, not a complete restorable backup; import accepts only known UUIDs, recreates included histories under the same UUIDs, removes replacement relationships touching imported meters, preserves omitted readings, and requires confirmation.
 
 #### Scenario: User consults export documentation
 - **WHEN** the user reads the export documentation
-- **THEN** they can interpret values and meter IDs and understand that future import behavior is not yet defined
+- **THEN** they can interpret the CSV and understand the known-meter restriction, replacement-link removal, omitted-meter behavior, and confirmation requirement
+
+### Requirement: Import readings for known meters
+The app SHALL accept CSV rows only for installation UUIDs known before import. For each included UUID, it SHALL recreate the installation and readings under the same UUID and remove saved replacement relationships that reference it. Readings for omitted UUIDs SHALL remain unchanged. The meter with the latest reading date SHALL be current; installation start date SHALL break ties.
+
+#### Scenario: Recreate included meter histories
+- **WHEN** the user confirms a valid CSV containing readings for known meter IDs
+- **THEN** the included installations and readings are recreated under the same UUIDs, and omitted meter readings remain unchanged
+
+#### Scenario: Remove a saved replacement relationship
+- **WHEN** an included installation participates in a saved meter replacement
+- **THEN** the replacement relationship is removed without requiring or inventing endpoint readings; readings for an omitted installation remain unchanged
+
+#### Scenario: Select the current meter by latest reading
+- **WHEN** independent meter histories have different latest reading dates
+- **THEN** the installation with the latest reading date is current
+
+#### Scenario: Break a latest-date tie
+- **WHEN** multiple installations have a reading on the latest date
+- **THEN** the installation with the latest start date is current
+
+#### Scenario: Reject an unknown meter ID
+- **WHEN** any CSV row references a UUID not known before import
+- **THEN** the whole import is rejected, no data changes, and the user sees a short error with row context
+
+### Requirement: Preview and apply CSV imports atomically
+The app SHALL validate the complete import and show a concise warning that meter data will be replaced and related replacement links cleared. The preview SHALL NOT show meter UUIDs or per-meter counts. Cancellation or validation failure SHALL leave data unchanged; confirmation SHALL commit the import atomically.
+
+#### Scenario: Cancel a valid import
+- **WHEN** the user cancels after reviewing the preview
+- **THEN** no installation, reading, or replacement data changes
+
+#### Scenario: Invalid data prevents partial import
+- **WHEN** any CSV row, meter history, or tracker integrity check fails
+- **THEN** the whole import is rejected and no tracker data changes
+
+#### Scenario: Commit a confirmed import
+- **WHEN** the user confirms a valid preview and persistence succeeds
+- **THEN** included histories are recreated, affected replacement links are removed, omitted readings remain unchanged, and the tracker publishes one committed snapshot
+
+### Requirement: Resolve duplicate CSV readings deterministically
+For duplicate rows with the same meter UUID and date, the app SHALL keep the last row in file order. Rows for different UUIDs on the same date SHALL remain distinct.
+
+#### Scenario: Duplicate date for one meter
+- **WHEN** the CSV contains multiple rows for one UUID and date with different values
+- **THEN** the last value in file order is imported
+
+#### Scenario: Same date across meters
+- **WHEN** known meters have readings on the same date
+- **THEN** each meter's reading remains associated with its own UUID
+
+### Requirement: Report CSV import errors safely
+The app SHALL map stable internal error codes to short localized messages, include row and field context when available, and SHALL NOT display internal code names or raw exception messages.
+
+#### Scenario: Invalid CSV structure
+- **WHEN** the header or a row has an invalid structure
+- **THEN** a short localized message identifies the error and row when available; the internal code is CSV_HEADER_INVALID or CSV_ROW_INVALID
+
+#### Scenario: Invalid meter, date, or value
+- **WHEN** a row contains a malformed or unknown UUID, invalid date/value, or negative value
+- **THEN** a short localized message includes row and field context; the internal code is CSV_METER_ID_INVALID, CSV_METER_UNKNOWN, CSV_DATE_INVALID, CSV_VALUE_INVALID, or CSV_VALUE_NEGATIVE
+
+#### Scenario: Invalid meter history
+- **WHEN** values decrease within one UUID or consumption intervals overlap across independent meters
+- **THEN** import fails without changing data and uses internal code CSV_METER_HISTORY_INVALID, with row/field context when available
+
+#### Scenario: File or import failure
+- **WHEN** file access or an unexpected import operation fails
+- **THEN** the user sees a short safe error mapped from CSV_FILE_READ_FAILED or CSV_IMPORT_FAILED, without exception text
+
+#### Scenario: Imported history predates a former replacement date
+- **WHEN** imported per-meter histories are valid but do not contain the tracker's former replacement date or endpoints
+- **THEN** import succeeds without requiring or inventing replacement-boundary readings

@@ -104,4 +104,24 @@ class ReadingValidationTest {
         assertEquals(ORIGINAL_INSTALLATION_ID, installationForDate(tracker, today.minusDays(2))?.id)
         assertEquals("new", installationForDate(tracker, today)?.id)
     }
+
+    @Test fun independentMeterHistoriesRouteNewEntriesToTheCurrentMeter() {
+        val old = MeterInstallation("old")
+        val current = MeterInstallation("current", today.minusDays(4))
+        val tracker = TrackerData(
+            readings = listOf(
+                Reading("old-reading", today.minusDays(10), "10".toBigDecimal(), old.id),
+                Reading("current-reading", today.minusDays(3), "3".toBigDecimal(), current.id),
+            ),
+            installations = listOf(old, current),
+        )
+
+        assertEquals(current, tracker.currentInstallation)
+        assertEquals(current, installationForDate(tracker, today.minusDays(8)))
+        assertEquals(current.id, (evaluateSave(
+            tracker,
+            SaveReadingIntent.Add(today, ParsedMeter.Value("4".toBigDecimal()), today),
+            "added",
+        ) as ReadingValidation.Accepted).candidate.installationId)
+    }
 }

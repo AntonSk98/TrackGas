@@ -206,8 +206,10 @@ class ConsumptionTest {
             readingIntervals(listOf(reading(27, "1100"), final, initial.copy(date = reading(27, "0").date),
                 reading(29, "3").copy(id = "overlap", installationId = "new")))
         }
+        val independent = tracker.copy(replacements = emptyList())
+        assertNull(readingCollectionViolation(independent))
+        assertEquals(2, readingIntervals(independent).size)
         for (invalid in listOf(
-            tracker.copy(replacements = emptyList()),
             tracker.copy(installations = listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID))),
             tracker.copy(readings = tracker.readings.filterNot { it.id == initial.id }),
             tracker.copy(readings = tracker.readings + reading(30, "1106")),

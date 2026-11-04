@@ -451,7 +451,7 @@ class OrderedRepositoryTest {
             assertEquals(initial.readings, changed.readings)
             assertEquals("changed-metadata", changed.tracker.replacements.single().id)
             assertTrue(changed.revision > initial.revision)
-            database.readings().insertInstallation(InstallationEntity("disconnected", "2026-10-27"))
+            database.readings().insertInstallation(InstallationEntity("disconnected", "not-a-date"))
             val failure = withTimeout(5_000) { failures.receive() }
             assertEquals(ReadingFailureCategory.STORED_DATA, (failure as ReadingStorageException).category)
         } finally { observer.cancelAndJoin() }

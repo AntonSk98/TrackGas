@@ -29,6 +29,10 @@ fun validateReadingDate(readings: List<Reading>, id: String?, date: LocalDate?, 
 /** Replacement days are occupied; other dates unambiguously belong to one installation. */
 fun installationForDate(tracker: TrackerData, date: LocalDate): MeterInstallation? {
     if (tracker.replacements.any { it.date == date }) return null
+    val roots = tracker.installations.filter { installation ->
+        tracker.replacements.none { it.newInstallationId == installation.id }
+    }
+    if (roots.size > 1) return tracker.currentInstallation
     return tracker.installations.filter { it.startDate == null || it.startDate < date }
         .maxWithOrNull(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
 }

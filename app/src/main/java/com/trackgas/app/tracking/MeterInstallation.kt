@@ -31,7 +31,17 @@ data class TrackerData(
     val replacements: List<MeterReplacement> = emptyList(),
 ) {
     val currentInstallation: MeterInstallation
-        get() = installations.single { installation -> replacements.none { it.oldInstallationId == installation.id } }
+        get() {
+            val latestReadingDate = readings.maxOfOrNull { it.date }
+            val candidates = latestReadingDate?.let { latest ->
+                installations.filter { meter -> readings.any { it.installationId == meter.id && it.date == latest } }
+            }?.takeIf { it.isNotEmpty() } ?: installations
+            return candidates.maxWithOrNull(
+                compareBy<MeterInstallation> { it.startDate != null }
+                    .thenBy { it.startDate }
+                    .thenBy { it.id },
+            ) ?: error("Tracker must contain an installation")
+        }
 
     fun isBoundaryReading(id: String): Boolean =
         replacements.any { it.finalReadingId == id || it.initialReadingId == id }

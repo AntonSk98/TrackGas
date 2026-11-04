@@ -415,7 +415,7 @@ class RoomReadingRepositoryTest {
                 "UPDATE replacements SET finalReadingId = '${boundary.finalReadingId}'",
             "UPDATE replacements SET finalReadingId = '${boundary.initialReadingId}'" to
                 "UPDATE replacements SET finalReadingId = '${boundary.finalReadingId}'",
-            "INSERT INTO installations (id, startDate) VALUES ('disconnected', '2026-10-27')" to
+            "INSERT INTO installations (id, startDate) VALUES ('disconnected', 'not-a-date')" to
                 "DELETE FROM installations WHERE id = 'disconnected'",
         )
         for ((corrupt, repair) in corruptions) {
@@ -450,5 +450,127 @@ class RoomReadingRepositoryTest {
             assertEquals(1L, restored.revision)
             assertEquals(valid, restored.tracker)
         }
+    }
+
+    @Test fun csvImportRecreatesOnlyIncludedMeterAndRemovesItsReplacementLink() = runBlocking {
+        save("2026-10-25", "1100.0000")
+        val oldFinal = (save("2026-10-26", "1105.0000") as SaveReadingResult.Saved).snapshot.readings.single()
+        val beforeReplace = repository.observeReadings().first().tracker
+        assertTrue(repository.replaceMeter(ReplaceMeterIntent(replacementTarget(beforeReplace, today), today)) is ReplaceMeterResult.Replaced)
+        val before = repository.observeReadings().first().tracker
+        val boundary = before.replacements.single()
+        val omittedMeterReading = before.readings.single { it.id == boundary.initialReadingId }
+        val oldMeter = before.installations.single { it.startDate == null }
+        val csv = "meter_id;date;meter_value\n" +
+            "${oldMeter.id};2026-10-25;1099.0000\n" +
+            "${oldMeter.id};2026-10-26;1110.0000\n"
+
+        val preview = (repository.previewCsvImport(csv) as CsvImportPreviewResult.Ready).preview
+        assertEquals(listOf(CsvImportMeterChange(oldMeter.id, 2, 2)), preview.changes)
+        val committed = (repository.confirmCsvImport(preview) as CsvImportCommitResult.Committed).snapshot
+        assertTrue(committed.revision > preview.baseRevision)
+        assertEquals(omittedMeterReading, committed.readings.single { it.id == omittedMeterReading.id })
+        assertEquals(3, committed.readings.size)
+        assertTrue(committed.tracker.replacements.isEmpty())
+        assertEquals(before.installations.map { it.id }.toSet(), committed.tracker.installations.map { it.id }.toSet())
+        val updatedFinal = committed.readings.single { it.installationId == oldMeter.id && it.date == today }
+        assertNotEquals(oldFinal.id, updatedFinal.id)
+        assertEquals(oldFinal.installationId, updatedFinal.installationId)
+        assertEquals(today, updatedFinal.date)
+        assertEquals("1110.0000", updatedFinal.cubicMetres.toPlainString())
+        assertEquals(boundary.newInstallationId, committed.tracker.currentInstallation.id)
+        assertEquals(committed.tracker, repository.observeReadings().first().tracker)
+    }
+
+    @Test fun csvImportAcceptsHistoriesBeforeSavedReplacementAndKeepsCurrentUuid() = runBlocking {
+        save("2026-10-25", "1100")
+        save("2026-10-26", "1105")
+        val base = repository.observeReadings().first().tracker
+        repository.replaceMeter(ReplaceMeterIntent(replacementTarget(base, today), today))
+        val before = repository.observeReadings().first().tracker
+        val oldMeter = before.installations.single { it.startDate == null }.id
+        val currentMeter = before.currentInstallation.id
+        val csv = "meter_id;date;meter_value\n" +
+            "$oldMeter;2025-10-10;29303.014\n" +
+            "$oldMeter;2025-10-11;29307.533\n" +
+            "$currentMeter;2025-11-26;7.661\n" +
+            "$currentMeter;2025-11-27;17.228\n"
+
+        val preview = (repository.previewCsvImport(csv) as CsvImportPreviewResult.Ready).preview
+        val result = repository.confirmCsvImport(preview) as CsvImportCommitResult.Committed
+        assertEquals(before.installations.map { it.id }.toSet(), result.snapshot.tracker.installations.map { it.id }.toSet())
+        assertTrue(result.snapshot.tracker.replacements.isEmpty())
+        assertEquals(currentMeter, result.snapshot.tracker.currentInstallation.id)
+        assertEquals(4, result.snapshot.readings.size)
+        assertEquals(setOf(oldMeter, currentMeter), result.snapshot.readings.map { it.installationId }.toSet())
+        assertEquals("29307.533", result.snapshot.readings.single { it.installationId == oldMeter && it.date == LocalDate.parse("2025-10-11") }.cubicMetres.toPlainString())
+    }
+
+    @Test fun csvPreviewRejectsOverlappingIndependentMeterCoverageWithoutWrites() = runBlocking {
+        save("2026-10-20", "100")
+        save("2026-10-26", "110")
+        val beforeReplacement = repository.observeReadings().first().tracker
+        repository.replaceMeter(ReplaceMeterIntent(replacementTarget(beforeReplacement, today), today))
+        val before = repository.observeReadings().first().tracker
+        val oldMeter = before.installations.single { it.startDate == null }.id
+        val newMeter = before.currentInstallation.id
+        val csv = "meter_id;date;meter_value\n" +
+            "$oldMeter;2026-10-01;100\n$oldMeter;2026-10-03;110\n" +
+            "$newMeter;2026-10-01;200\n$newMeter;2026-10-03;205\n"
+
+        val error = (repository.previewCsvImport(csv) as CsvImportPreviewResult.Rejected).error
+        assertEquals(CsvImportErrorCode.CSV_METER_HISTORY_INVALID, error.code)
+        assertEquals(before, repository.observeReadings().first().tracker)
+    }
+
+    @Test fun csvPreviewRejectsUnknownIdsAndInvalidCompleteHistoryWithoutWrites() = runBlocking {
+        save("2026-10-01", "100")
+        val before = repository.observeReadings().first().tracker
+        val meter = before.installations.single().id
+        val unknown = "22222222-2222-4222-8222-222222222222"
+        val unknownCsv = "meter_id;date;meter_value\n$meter;2026-10-02;101\n$unknown;2026-10-03;1\n"
+        val unknownError = (repository.previewCsvImport(unknownCsv) as CsvImportPreviewResult.Rejected).error
+        assertEquals(CsvImportErrorCode.CSV_METER_UNKNOWN, unknownError.code)
+        assertEquals(3, unknownError.row)
+        assertEquals(before, repository.observeReadings().first().tracker)
+
+        val invalidHistory = "meter_id;date;meter_value\n$meter;2026-10-01;100\n$meter;2026-10-02;99\n"
+        val historyError = (repository.previewCsvImport(invalidHistory) as CsvImportPreviewResult.Rejected).error
+        assertEquals(CsvImportErrorCode.CSV_METER_HISTORY_INVALID, historyError.code)
+        assertEquals(before, repository.observeReadings().first().tracker)
+    }
+
+    @Test fun csvCommitRejectsPreviewWhenTrackerChangedAndLeavesNewerDataUntouched() = runBlocking {
+        save("2026-10-01", "100")
+        val original = repository.observeReadings().first().tracker
+        val meter = original.installations.single().id
+        val csv = "meter_id;date;meter_value\n$meter;2026-10-01;101\n"
+        val preview = (repository.previewCsvImport(csv) as CsvImportPreviewResult.Ready).preview
+        save("2026-10-02", "110")
+        val newer = repository.observeReadings().first().tracker
+        assertEquals(CsvImportCommitResult.StalePreview, repository.confirmCsvImport(preview))
+        assertEquals(newer, repository.observeReadings().first().tracker)
+        assertNotEquals(original, newer)
+    }
+
+    @Test fun failedCsvReplacementTransactionRollsBackReadingsAndReplacementRows() = runBlocking {
+        save("2026-10-25", "1100")
+        save("2026-10-26", "1105")
+        val base = repository.observeReadings().first().tracker
+        repository.replaceMeter(ReplaceMeterIntent(replacementTarget(base, today), today))
+        val before = repository.observeReadings().first().tracker
+        val oldMeter = before.installations.single { it.startDate == null }
+        val csv = "meter_id;date;meter_value\n${oldMeter.id};2026-10-25;1100\n${oldMeter.id};2026-10-26;1110\n"
+        val preview = (repository.previewCsvImport(csv) as CsvImportPreviewResult.Ready).preview
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_import BEFORE INSERT ON readings BEGIN SELECT RAISE(ABORT, 'rejected'); END",
+        )
+        try {
+            repository.confirmCsvImport(preview)
+            fail("Expected CSV transaction failure")
+        } catch (error: ReadingStorageException) {
+            assertEquals(ReadingFailureCategory.STORAGE_ACCESS, error.category)
+        }
+        assertEquals(before, repository.observeReadings().first().tracker)
     }
 }

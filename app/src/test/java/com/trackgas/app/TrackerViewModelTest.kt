@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import com.trackgas.app.tracking.*
 import java.time.LocalDate
+import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.util.Locale
 import java.util.TimeZone
 import kotlinx.coroutines.CompletableDeferred
@@ -69,7 +71,7 @@ class TrackerViewModelTest {
             store.clear()
         }
 
-        @Test fun cancelledExportProducesNoCompletionAndAllowsRetry() = runTest {
+    @Test fun cancelledExportProducesNoCompletionAndAllowsRetry() = runTest {
             val repo = ScriptedReadingRepository()
             val vm = TrackerViewModel(repo) { today }
             repo.deliver(TrackerData()); runCurrent()
@@ -78,6 +80,79 @@ class TrackerViewModelTest {
             assertEquals(ExportState.Idle, vm.state.export)
             assertNotNull(vm.requestExport())
         }
+    }
+
+    @Test fun csvImportSelectionPreviewAndConfirmationAreSingleSubmissionAndPublishCommit() = runTest {
+        val meterId = "11111111-1111-4111-8111-111111111111"
+        val base = TrackerData(installations = listOf(MeterInstallation(meterId)))
+        val imported = Reading("imported", today.minusDays(1), "100.2500".toBigDecimal(), meterId)
+        val preview = CsvImportPreview(
+            "preview", 1, listOf(CsvImportMeterChange(meterId, 0, 1)), 0, base,
+            listOf(CsvReadingRow(meterId, imported.date, imported.cubicMetres, 2)),
+        )
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo, ioDispatcher = dispatcher) { today }
+        repo.deliver(base); runCurrent()
+
+        val request = requireNotNull(vm.requestCsvImport())
+        assertNull(vm.requestCsvImport())
+        repo.csvPreviewOutcomes.send(Result.success(CsvImportPreviewResult.Ready(preview)))
+        vm.readCsvImport(request) {
+            ByteArrayInputStream("meter_id;date;meter_value\n$meterId;${imported.date};100.2500\n".toByteArray())
+        }
+        runCurrent()
+        assertEquals(CsvImportState.Preview(request, preview), vm.state.csvImport)
+
+        vm.confirmCsvImport()
+        vm.confirmCsvImport()
+        runCurrent()
+        assertEquals(CsvImportState.Applying(request, preview), vm.state.csvImport)
+        assertEquals(1, repo.csvConfirmations.size)
+        repo.csvCommitOutcomes.send(Result.success(CsvImportCommitResult.Committed(CommittedSnapshot(2, TrackerData(
+            listOf(imported), listOf(MeterInstallation(meterId)), emptyList(),
+        )))))
+        runCurrent()
+        assertEquals(CsvImportState.Complete(request, 1), vm.state.csvImport)
+        assertEquals(listOf(imported), vm.state.readings)
+        assertEquals(TrackerTab.DASHBOARD, vm.state.tab)
+        assertEquals(CsvImportState.Complete(request, 1), vm.state.csvImport)
+        vm.acknowledgeCsvImport("stale")
+        assertTrue(vm.state.csvImport is CsvImportState.Complete)
+        vm.acknowledgeCsvImport(request)
+        assertEquals(CsvImportState.Idle, vm.state.csvImport)
+    }
+
+    @Test fun csvPickerCancellationIsNoOpAndReadErrorsUseSafeStableCode() = runTest {
+        val meterId = "11111111-1111-4111-8111-111111111111"
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo, ioDispatcher = dispatcher) { today }
+        repo.deliver(TrackerData(installations = listOf(MeterInstallation(meterId)))); runCurrent()
+        val before = vm.state.tracker
+        val cancelled = requireNotNull(vm.requestCsvImport())
+        vm.cancelCsvSelection(cancelled)
+        assertEquals(CsvImportState.Cancelled(cancelled), vm.state.csvImport)
+        assertEquals(before, vm.state.tracker)
+        vm.acknowledgeCsvImport(cancelled)
+        val failed = requireNotNull(vm.requestCsvImport())
+        vm.readCsvImport(failed) { throw IOException("private file path") }
+        runCurrent()
+        val error = (vm.state.csvImport as CsvImportState.Failed).error
+        assertEquals(CsvImportErrorCode.CSV_FILE_READ_FAILED, error.code)
+        assertNull(error.row)
+        assertNull(error.field)
+        assertEquals(before, vm.state.tracker)
+
+        vm.acknowledgeCsvImport(failed)
+        val unexpected = requireNotNull(vm.requestCsvImport())
+        repo.csvPreviewOutcomes.send(Result.failure(IllegalStateException("private exception details")))
+        vm.readCsvImport(unexpected) {
+            ByteArrayInputStream("meter_id;date;meter_value\n".toByteArray())
+        }
+        runCurrent()
+        val fallback = vm.state.csvImport as CsvImportState.Failed
+        assertEquals(CsvImportErrorCode.CSV_IMPORT_FAILED, fallback.error.code)
+        assertNull(fallback.error.row)
+        assertNull(fallback.error.field)
     }
 
     @Test fun transitionIdentityRejectsStaleSessionDialogRequestAndWrongAction() {
@@ -787,9 +862,13 @@ private class ScriptedReadingRepository : ReadingRepository {
     val deleteOutcomes = Channel<Result<DeleteReadingResult>>(Channel.UNLIMITED)
     val replacementOutcomes = Channel<Result<ReplaceMeterResult>>(Channel.UNLIMITED)
     val purgeOutcomes = Channel<Result<CommittedSnapshot>>(Channel.UNLIMITED)
+    val csvPreviewOutcomes = Channel<Result<CsvImportPreviewResult>>(Channel.UNLIMITED)
+    val csvCommitOutcomes = Channel<Result<CsvImportCommitResult>>(Channel.UNLIMITED)
     val saves = mutableListOf<SaveReadingIntent>()
     val deletes = mutableListOf<String>()
     val replacements = mutableListOf<ReplaceMeterIntent>()
+    val csvConfirmations = mutableListOf<CsvImportPreview>()
+    val csvInputs = mutableListOf<String>()
     var purges = 0
     var subscriptions = 0
 
@@ -821,5 +900,15 @@ private class ScriptedReadingRepository : ReadingRepository {
     override suspend fun purge(): CommittedSnapshot {
         purges++
         return purgeOutcomes.receive().getOrThrow()
+    }
+
+    override suspend fun previewCsvImport(text: String): CsvImportPreviewResult {
+        csvInputs += text
+        return csvPreviewOutcomes.receive().getOrThrow()
+    }
+
+    override suspend fun confirmCsvImport(preview: CsvImportPreview): CsvImportCommitResult {
+        csvConfirmations += preview
+        return csvCommitOutcomes.receive().getOrThrow()
     }
 }

@@ -40,6 +40,33 @@ data class CommittedSnapshot(val revision: Long, val tracker: TrackerData) {
     val readings: List<Reading> get() = tracker.readings
 }
 
+data class CsvImportMeterChange(
+    val installationId: String,
+    val beforeReadingCount: Int,
+    val afterReadingCount: Int,
+)
+
+/** An immutable, validated replacement staged against one committed tracker snapshot. */
+data class CsvImportPreview internal constructor(
+    val previewId: String,
+    val baseRevision: Long,
+    val changes: List<CsvImportMeterChange>,
+    internal val baseMutationRevision: Long,
+    internal val baseTracker: TrackerData,
+    internal val rows: List<CsvReadingRow>,
+)
+
+sealed interface CsvImportPreviewResult {
+    data class Ready(val preview: CsvImportPreview) : CsvImportPreviewResult
+    data class Rejected(val error: CsvImportError) : CsvImportPreviewResult
+}
+
+sealed interface CsvImportCommitResult {
+    data class Committed(val snapshot: CommittedSnapshot) : CsvImportCommitResult
+    data class Rejected(val error: CsvImportError) : CsvImportCommitResult
+    data object StalePreview : CsvImportCommitResult
+}
+
 /**
  * Transactional reading storage with one process-local revision domain shared by all consumers.
  *
@@ -84,6 +111,16 @@ interface ReadingRepository {
 
     /** Atomically revalidates the expected final reading and starts the next installation at zero. */
     suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult
+
+    /** Parses and validates an entire CSV against a consistent committed tracker snapshot. */
+    suspend fun previewCsvImport(text: String): CsvImportPreviewResult = CsvImportPreviewResult.Rejected(
+        CsvImportError(CsvImportErrorCode.CSV_IMPORT_FAILED),
+    )
+
+    /** Revalidates a preview against current data and atomically replaces its included histories. */
+    suspend fun confirmCsvImport(preview: CsvImportPreview): CsvImportCommitResult = CsvImportCommitResult.Rejected(
+        CsvImportError(CsvImportErrorCode.CSV_IMPORT_FAILED),
+    )
 
     /** Removes all tracking history atomically and returns an empty installation with a fresh identity. */
     suspend fun purge(): CommittedSnapshot

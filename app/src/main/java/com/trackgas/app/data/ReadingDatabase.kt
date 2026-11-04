@@ -117,6 +117,15 @@ interface ReadingDao {
     @Query("DELETE FROM readings WHERE id = :id")
     suspend fun delete(id: String): Int
 
+    @Query("DELETE FROM readings WHERE installationId IN (:installationIds)")
+    suspend fun deleteForInstallations(installationIds: List<String>)
+
+    @Query("DELETE FROM replacements WHERE oldInstallationId IN (:installationIds) OR newInstallationId IN (:installationIds)")
+    suspend fun deleteReplacementsForInstallations(installationIds: List<String>)
+
+    @Query("DELETE FROM installations WHERE id IN (:installationIds)")
+    suspend fun deleteInstallationsById(installationIds: List<String>)
+
     @Query("DELETE FROM replacements")
     suspend fun deleteReplacements()
 
@@ -153,5 +162,6 @@ abstract class ReadingDatabase : RoomDatabase() {
                 }
             }
         }
+
     }
 }

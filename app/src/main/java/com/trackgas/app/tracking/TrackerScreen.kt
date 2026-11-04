@@ -63,11 +63,15 @@ fun TrackerScreen(
     onOpenPurge: () -> Unit,
     onPurge: () -> Unit,
     onExport: () -> Unit = {},
+    onImport: () -> Unit = {},
+    onConfirmCsvImport: () -> Unit = {},
+    onCancelCsvImport: (String) -> Unit = {},
+    onAcknowledgeCsvImport: (String) -> Unit = {},
     onAcknowledgeExport: (String) -> Unit = {},
 ) {
     val locale = LocalConfiguration.current.locales[0]
     val ready = state.loadState == ReadingLoadState.READY
-    val mutationsEnabled = ready && !state.dialog.pending
+    val mutationsEnabled = ready && !state.dialog.pending && state.csvImport is CsvImportState.Idle
     var optionsExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(mutationsEnabled) { if (!mutationsEnabled) optionsExpanded = false }
     TrackerPager(
@@ -113,6 +117,20 @@ fun TrackerScreen(
                                 },
                                 enabled = state.export is ExportState.Idle,
                                 onClick = { optionsExpanded = false; onExport() },
+                            )
+                            DropdownMenuItem(
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                                text = { Text(stringResource(R.string.import_csv), style = MaterialTheme.typography.bodyLarge) },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_import),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                                enabled = state.export is ExportState.Idle,
+                                onClick = { optionsExpanded = false; onImport() },
                             )
                             DropdownMenuItem(
                                 modifier = Modifier.padding(horizontal = 4.dp),
@@ -231,4 +249,12 @@ fun TrackerScreen(
             PurgeTrackingDataDialog(dialog, state.loadState, onRetryLoad, onPurge, onDismissDialog)
         }
     }
+    CsvImportDialog(
+        state = state.csvImport,
+        loadState = state.loadState,
+        onRetryLoad = onRetryLoad,
+        onConfirm = onConfirmCsvImport,
+        onCancel = onCancelCsvImport,
+        onAcknowledge = onAcknowledgeCsvImport,
+    )
 }

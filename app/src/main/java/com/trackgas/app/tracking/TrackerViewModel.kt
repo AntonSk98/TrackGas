@@ -7,10 +7,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import java.io.OutputStream
+import java.io.InputStream
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import java.time.LocalDate
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,6 +32,17 @@ sealed interface ExportState {
     data class Complete(val requestId: String, val succeeded: Boolean) : ExportState
 }
 
+sealed interface CsvImportState {
+    data object Idle : CsvImportState
+    data class Selecting(val requestId: String) : CsvImportState
+    data class Reading(val requestId: String) : CsvImportState
+    data class Preview(val requestId: String, val preview: CsvImportPreview) : CsvImportState
+    data class Applying(val requestId: String, val preview: CsvImportPreview) : CsvImportState
+    data class Complete(val requestId: String, val affectedMeters: Int) : CsvImportState
+    data class Cancelled(val requestId: String) : CsvImportState
+    data class Failed(val requestId: String, val error: CsvImportError, val stalePreview: Boolean = false) : CsvImportState
+}
+
 data class TrackerState(
     val readings: List<Reading>,
     val period: CalendarPeriod,
@@ -36,11 +54,13 @@ data class TrackerState(
     val sessionId: String = UUID.randomUUID().toString(),
     val tracker: TrackerData = TrackerData(readings),
     val export: ExportState = ExportState.Idle,
+    val csvImport: CsvImportState = CsvImportState.Idle,
 )
 
 /** Publishes projections only from committed repository snapshots. */
 class TrackerViewModel(
     private val repository: ReadingRepository,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val currentDate: () -> LocalDate = { LocalDate.now() },
 ) : ViewModel() {
     private val initialPeriod = CalendarPeriod.containing(PeriodType.WEEK, today())
@@ -95,7 +115,7 @@ class TrackerViewModel(
     fun writeExport(requestId: String, open: () -> OutputStream?) {
         val snapshot = beginExportWrite(requestId) ?: return
         viewModelScope.launch {
-            val succeeded = withContext(Dispatchers.IO) { writeReadingCsv(snapshot, open) }
+            val succeeded = withContext(ioDispatcher) { writeReadingCsv(snapshot, open) }
             finishExportWrite(requestId, succeeded)
         }
     }
@@ -108,6 +128,113 @@ class TrackerViewModel(
     fun acknowledgeExport(requestId: String) {
         val export = state.export as? ExportState.Complete ?: return
         if (export.requestId == requestId) state = state.copy(export = ExportState.Idle)
+    }
+
+    fun requestCsvImport(): String? {
+        if (state.loadState != ReadingLoadState.READY || state.dialog.pending ||
+            state.csvImport !is CsvImportState.Idle || state.export !is ExportState.Idle
+        ) return null
+        val requestId = newId()
+        state = state.copy(csvImport = CsvImportState.Selecting(requestId))
+        return requestId
+    }
+
+    fun cancelCsvSelection(requestId: String) {
+        val current = state.csvImport as? CsvImportState.Selecting ?: return
+        if (current.requestId == requestId) state = state.copy(csvImport = CsvImportState.Cancelled(requestId))
+    }
+
+    fun failCsvPicker(requestId: String) {
+        val current = state.csvImport as? CsvImportState.Selecting ?: return
+        if (current.requestId == requestId) state = state.copy(csvImport = CsvImportState.Failed(
+            requestId, CsvImportError(CsvImportErrorCode.CSV_IMPORT_FAILED),
+        ))
+    }
+
+    fun readCsvImport(requestId: String, open: () -> InputStream?) {
+        val current = state.csvImport as? CsvImportState.Selecting ?: return
+        if (current.requestId != requestId) return
+        state = state.copy(csvImport = CsvImportState.Reading(requestId))
+        viewModelScope.launch {
+            val decoded = try {
+                withContext(ioDispatcher) {
+                    val bytes = open()?.use { it.readBytes() } ?: throw IOException()
+                    StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(bytes)).toString()
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                finishCsvImport(requestId, CsvImportState.Failed(
+                    requestId, CsvImportError(CsvImportErrorCode.CSV_FILE_READ_FAILED),
+                ))
+                return@launch
+            }
+            try {
+                when (val result = withContext(ioDispatcher) { repository.previewCsvImport(decoded) }) {
+                    is CsvImportPreviewResult.Ready -> finishCsvImport(requestId, CsvImportState.Preview(requestId, result.preview))
+                    is CsvImportPreviewResult.Rejected -> finishCsvImport(requestId, CsvImportState.Failed(requestId, result.error))
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                finishCsvImport(requestId, CsvImportState.Failed(
+                    requestId, CsvImportError(CsvImportErrorCode.CSV_IMPORT_FAILED),
+                ))
+            }
+        }
+    }
+
+    fun cancelCsvImport(requestId: String) {
+        val current = state.csvImport as? CsvImportState.Preview ?: return
+        if (current.requestId == requestId) state = state.copy(csvImport = CsvImportState.Cancelled(requestId))
+    }
+
+    fun confirmCsvImport() {
+        val preview = state.csvImport as? CsvImportState.Preview ?: return
+        if (state.loadState != ReadingLoadState.READY) return
+        state = state.copy(csvImport = CsvImportState.Applying(preview.requestId, preview.preview))
+        viewModelScope.launch {
+            try {
+                when (val result = withContext(ioDispatcher) { repository.confirmCsvImport(preview.preview) }) {
+                    is CsvImportCommitResult.Committed -> {
+                        acceptCommittedSnapshot(result.snapshot)
+                        finishCsvImport(preview.requestId, CsvImportState.Complete(preview.requestId, preview.preview.changes.size))
+                    }
+                    is CsvImportCommitResult.Rejected -> finishCsvImport(
+                        preview.requestId, CsvImportState.Failed(preview.requestId, result.error),
+                    )
+                    CsvImportCommitResult.StalePreview -> finishCsvImport(
+                        preview.requestId,
+                        CsvImportState.Failed(preview.requestId, CsvImportError(CsvImportErrorCode.CSV_IMPORT_FAILED), stalePreview = true),
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                finishCsvImport(preview.requestId, CsvImportState.Failed(
+                    preview.requestId, CsvImportError(CsvImportErrorCode.CSV_IMPORT_FAILED),
+                ))
+            }
+        }
+    }
+
+    fun acknowledgeCsvImport(requestId: String) {
+        if (state.csvImport.let { it is CsvImportState.Complete && it.requestId == requestId ||
+                it is CsvImportState.Cancelled && it.requestId == requestId ||
+                it is CsvImportState.Failed && it.requestId == requestId }
+        ) state = state.copy(csvImport = CsvImportState.Idle)
+    }
+
+    private fun finishCsvImport(requestId: String, result: CsvImportState) {
+        val currentId = when (val current = state.csvImport) {
+            is CsvImportState.Reading -> current.requestId
+            is CsvImportState.Applying -> current.requestId
+            else -> return
+        }
+        if (currentId == requestId) state = state.copy(csvImport = result)
     }
 
     private fun observeReadings() {
