@@ -1,5 +1,8 @@
 <resources>
     <string name="app_name">TrackGas</string>
+    <string name="language">Language</string>
+    <string name="language_english" translatable="false">English</string>
+    <string name="language_german" translatable="false">Deutsch</string>
     <string name="dashboard_tab">Dashboard</string>
     <string name="history_tab">History</string>
     <string name="add_reading">Add reading</string>

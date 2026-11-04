@@ -1,6 +1,7 @@
 package com.trackgas.app
 
 import android.app.Application
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.room.Room
 import com.trackgas.app.data.ReadingDatabase
 import com.trackgas.app.data.RoomReadingRepository
@@ -8,6 +9,13 @@ import com.trackgas.app.tracking.ReadingRepository
 
 class TrackGasApplication : Application() {
     val trackerStoreOwner = TrackerStoreOwner()
+
+    override fun onCreate() {
+        super.onCreate()
+        if (AppCompatDelegate.getApplicationLocales().isEmpty) {
+            AppLanguages.select(AppLanguage.ENGLISH)
+        }
+    }
 
     private val database by lazy {
         Room.databaseBuilder(this, ReadingDatabase::class.java, "readings.db")

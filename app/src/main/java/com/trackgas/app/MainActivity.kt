@@ -3,10 +3,10 @@ package com.trackgas.app
 import android.os.Bundle
 import android.graphics.Color
 import android.app.ActivityManager
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.ViewModelProvider
 import com.trackgas.app.tracking.TrackerScreen
@@ -19,7 +19,7 @@ import java.util.UUID
  *
  * The application retains each activity's tracker across activity destruction within the process.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     private lateinit var trackerId: String
     private lateinit var csvPickerCoordinator: CsvDocumentPickerCoordinator
     private val tracker by lazy {

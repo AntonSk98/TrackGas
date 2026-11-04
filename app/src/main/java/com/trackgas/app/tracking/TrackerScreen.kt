@@ -13,6 +13,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.window.Dialog
+import com.trackgas.app.AppLanguages
 import com.trackgas.app.R
 import java.time.LocalDate
 import java.util.Locale
@@ -73,6 +75,7 @@ fun TrackerScreen(
     val ready = state.loadState == ReadingLoadState.READY
     val mutationsEnabled = ready && !state.dialog.pending && state.csvImport is CsvImportState.Idle
     var optionsExpanded by remember { mutableStateOf(false) }
+    var languageDialogOpen by remember { mutableStateOf(false) }
     LaunchedEffect(mutationsEnabled) { if (!mutationsEnabled) optionsExpanded = false }
     TrackerPager(
         tab = state.tab,
@@ -134,6 +137,20 @@ fun TrackerScreen(
                             )
                             DropdownMenuItem(
                                 modifier = Modifier.padding(horizontal = 4.dp),
+                                text = { Text(stringResource(R.string.language), style = MaterialTheme.typography.bodyLarge) },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_language),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                                onClick = { optionsExpanded = false; languageDialogOpen = true },
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            DropdownMenuItem(
+                                modifier = Modifier.padding(horizontal = 4.dp),
                                 text = {
                                     Text(
                                         stringResource(R.string.replace_meter),
@@ -188,6 +205,12 @@ fun TrackerScreen(
                 historyItems(state.readings, locale, onEdit = onOpenEdit, onDelete = onOpenDelete, tracker = state.tracker)
             }
         }
+    }
+    if (languageDialogOpen) {
+        LanguageDialog(
+            onDismiss = { languageDialogOpen = false },
+            onSelect = { languageDialogOpen = false; AppLanguages.select(it) },
+        )
     }
     val export = state.export
     if (export is ExportState.Complete && export.succeeded) {
