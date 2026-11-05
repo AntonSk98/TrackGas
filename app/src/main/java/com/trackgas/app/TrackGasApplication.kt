@@ -5,6 +5,10 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.room.Room
 import com.trackgas.app.data.ReadingDatabase
 import com.trackgas.app.data.RoomReadingRepository
+import com.trackgas.app.reminders.ReminderScheduler
+import com.trackgas.app.reminders.ReminderStore
+import com.trackgas.app.reminders.SharedPreferencesReminderStore
+import com.trackgas.app.reminders.WorkManagerReminderScheduler
 import com.trackgas.app.tracking.ReadingRepository
 import com.trackgas.app.temperature.ConnectivityNetworkMonitor
 import com.trackgas.app.temperature.MeterLocationStore
@@ -40,6 +44,8 @@ class TrackGasApplication : Application() {
             .build()
     }
     val readingRepository: ReadingRepository by lazy { RoomReadingRepository(database) }
+    val reminderStore: ReminderStore by lazy { SharedPreferencesReminderStore(this) }
+    val reminderScheduler: ReminderScheduler by lazy { WorkManagerReminderScheduler(this) }
     val temperatureRepository: TemperatureRepository by lazy { RoomTemperatureRepository(database) }
     val meterLocationStore: MeterLocationStore by lazy { SharedPreferencesMeterLocationStore(this) }
     val locationResolver: LocationResolver by lazy { OpenMeteoGeocoder() }

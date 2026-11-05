@@ -1,5 +1,8 @@
 <resources>
     <string name="app_name">TrackGas</string>
+    <string name="reminder_channel_name">Erinnerungen</string>
+    <string name="reminder_title">Dein Gaszähler ruft</string>
+    <string name="reminder_body">Vergiss nicht, den heutigen Gaszählerstand einzutragen.</string>
     <string name="meter_location">Standort</string>
     <string name="meter_location_title">Standort</string>
     <string name="meter_location_description">Stadt oder Adresse des Zählers eingeben.</string>

@@ -9,6 +9,8 @@ import com.trackgas.app.temperature.NetworkMonitor
 import com.trackgas.app.temperature.TemperatureCheckRequester
 import com.trackgas.app.temperature.TemperatureRepository
 import com.trackgas.app.temperature.TemperatureServices
+import com.trackgas.app.reminders.ReminderScheduler
+import com.trackgas.app.reminders.ReminderStore
 import com.trackgas.app.tracking.*
 import java.time.LocalDate
 import java.io.ByteArrayInputStream
@@ -139,9 +141,13 @@ class TrackerViewModelTest {
         )
         val repo = ScriptedReadingRepository()
         val checks = CountingCheckRequester()
+        val reminderStore = FakeReminderStore()
+        val reminderScheduler = FakeReminderScheduler()
         val vm = TrackerViewModel(
             repository = repo,
             ioDispatcher = dispatcher,
+            reminderStore = reminderStore,
+            reminderScheduler = reminderScheduler,
             temperature = TemperatureServices(
                 locationResolver = object : LocationResolver {
                     override fun suggest(query: String): List<MeterLocation> = emptyList()
@@ -174,6 +180,8 @@ class TrackerViewModelTest {
         vm.save(today, "112.1250", Locale.US)
         runCurrent()
         assertEquals(1, checks.requests)
+        assertNotNull(reminderStore.lastSubmissionMillis())
+        assertEquals(1, reminderScheduler.schedules)
 
         val added = vm.state.readings.single { it.date == two.date }
         repo.deleteOutcomes.send(Result.success(DeleteReadingResult.Deleted(
@@ -206,6 +214,7 @@ class TrackerViewModelTest {
         vm.confirmCsvImport()
         runCurrent()
         assertEquals(3, checks.requests)
+        assertEquals(2, reminderScheduler.schedules)
     }
 
     @Test fun csvPickerCancellationIsNoOpAndReadErrorsUseSafeStableCode() = runTest {
@@ -294,7 +303,15 @@ class TrackerViewModelTest {
 
     @Test fun purgeSuccessAndFailurePreserveCommittedStateUntilCommit() = runTest {
         val repo = ScriptedReadingRepository()
-        val vm = TrackerViewModel(repo) { today }
+        val reminderStore = FakeReminderStore()
+        val reminderScheduler = FakeReminderScheduler()
+        val vm = TrackerViewModel(
+            repository = repo,
+            ioDispatcher = dispatcher,
+            reminderStore = reminderStore,
+            reminderScheduler = reminderScheduler,
+            currentDate = { today },
+        )
         val original = replaced()
         repo.deliver(original, 1); runCurrent()
         vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH); vm.navigate(-1)
@@ -308,6 +325,8 @@ class TrackerViewModelTest {
         assertEquals(original, vm.state.tracker)
         vm.purge(); runCurrent()
         repo.purgeOutcomes.send(Result.success(CommittedSnapshot(3, TrackerData()))); runCurrent()
+        assertNull(reminderStore.lastSubmissionMillis())
+        assertEquals(1, reminderScheduler.cancellations)
         assertEquals(ReadingDialog.Closed, vm.state.dialog)
         assertEquals(TrackerData(), vm.state.tracker)
         assertTrue(vm.state.readings.isEmpty())
@@ -324,7 +343,15 @@ class TrackerViewModelTest {
     @Test fun purgeAndObservationFailuresRemainIndependent() = runTest {
         for (failureBefore in listOf(false, true)) {
             val repo = ScriptedReadingRepository()
-            val vm = TrackerViewModel(repo) { today }
+            val reminderStore = FakeReminderStore()
+            val reminderScheduler = FakeReminderScheduler()
+            val vm = TrackerViewModel(
+                repository = repo,
+                ioDispatcher = dispatcher,
+                reminderStore = reminderStore,
+                reminderScheduler = reminderScheduler,
+                currentDate = { today },
+            )
             repo.deliver(listOf(one, two)); runCurrent()
             vm.openPurge(); vm.purge(); runCurrent()
             if (failureBefore) { repo.failObservation(); runCurrent() }
@@ -874,7 +901,15 @@ class TrackerViewModelTest {
     @Test fun committedReplacementClosesDespiteIndependentObservationFailureAndRetryDoesNotResubmit() = runTest {
         for (failureBefore in listOf(false, true)) {
             val repo = ScriptedReadingRepository()
-            val vm = TrackerViewModel(repo) { today }
+            val reminderStore = FakeReminderStore()
+            val reminderScheduler = FakeReminderScheduler()
+            val vm = TrackerViewModel(
+                repository = repo,
+                ioDispatcher = dispatcher,
+                reminderStore = reminderStore,
+                reminderScheduler = reminderScheduler,
+                currentDate = { today },
+            )
             repo.deliver(listOf(one, two)); runCurrent()
             vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH); vm.navigate(-1)
             val period = vm.state.period
@@ -882,6 +917,8 @@ class TrackerViewModelTest {
             if (failureBefore) { repo.failObservation(); runCurrent() }
             val committed = replaced()
             repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Replaced(CommittedSnapshot(3, committed)))); runCurrent()
+            assertNotNull(reminderStore.lastSubmissionMillis())
+            assertEquals(1, reminderScheduler.schedules)
             if (!failureBefore) { repo.failObservation(); runCurrent() }
             assertEquals(ReadingDialog.Closed, vm.state.dialog)
             assertEquals(ReadingLoadState.ERROR, vm.state.loadState)
@@ -947,6 +984,25 @@ private class CountingCheckRequester : TemperatureCheckRequester {
     var locationRefreshes = 0
     override fun requestCheck() { requests++ }
     override fun requestLocationRefresh() { locationRefreshes++ }
+}
+
+private class FakeReminderStore : ReminderStore {
+    private var lastSubmission: Long? = null
+    private var declined = false
+
+    override fun lastSubmissionMillis(): Long? = lastSubmission
+    override fun setLastSubmissionMillis(timestampMillis: Long) { lastSubmission = timestampMillis }
+    override fun clearLastSubmissionMillis() { lastSubmission = null }
+    override fun permissionDeclined(): Boolean = declined
+    override fun setPermissionDeclined(declined: Boolean) { this.declined = declined }
+}
+
+private class FakeReminderScheduler : ReminderScheduler {
+    var schedules = 0
+    var cancellations = 0
+
+    override fun schedule() { schedules++ }
+    override fun cancel() { cancellations++ }
 }
 
 private class ScriptedReadingRepository : ReadingRepository {

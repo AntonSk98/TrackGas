@@ -1,5 +1,8 @@
 <resources>
     <string name="app_name">TrackGas</string>
+    <string name="reminder_channel_name">Reminders</string>
+    <string name="reminder_title">Your gas meter is calling</string>
+    <string name="reminder_body">Don’t forget to log today’s gas meter value.</string>
     <string name="meter_location">Location</string>
     <string name="meter_location_title">Location</string>
     <string name="meter_location_description">Enter your meter’s city or address.</string>

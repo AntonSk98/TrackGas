@@ -8,6 +8,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.trackgas.app.temperature.MeterLocation
 import com.trackgas.app.temperature.TemperatureServices
+import com.trackgas.app.reminders.ReminderScheduler
+import com.trackgas.app.reminders.ReminderStore
 import java.io.OutputStream
 import java.io.InputStream
 import java.io.IOException
@@ -89,6 +91,8 @@ class TrackerViewModel(
     private val repository: ReadingRepository,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val temperature: TemperatureServices? = null,
+    private val reminderStore: ReminderStore? = null,
+    private val reminderScheduler: ReminderScheduler? = null,
     private val currentDate: () -> LocalDate = { LocalDate.now() },
 ) : ViewModel() {
     private val initialPeriod = CalendarPeriod.containing(PeriodType.WEEK, today())
@@ -232,6 +236,7 @@ class TrackerViewModel(
                     is CsvImportCommitResult.Committed -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishCsvImport(preview.requestId, CsvImportState.Complete(preview.requestId, preview.preview.changes.size))
+                        scheduleReminderAfterSubmission()
                         temperature?.checks?.requestCheck()
                     }
                     is CsvImportCommitResult.Rejected -> finishCsvImport(
@@ -438,6 +443,7 @@ class TrackerViewModel(
                     is ReplaceMeterResult.Replaced -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishReplacement(request, null)
+                        scheduleReminderAfterSubmission()
                     }
                 }
             } catch (error: ReadingStorageException) {
@@ -463,6 +469,7 @@ class TrackerViewModel(
                     is SaveReadingResult.Saved -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishSave(request, null)
+                        scheduleReminderAfterSubmission()
                         temperature?.checks?.requestCheck()
                         if (dialog.target is ReadingTarget.Add) requestLocationAfterAdd()
                     }
@@ -503,6 +510,7 @@ class TrackerViewModel(
         viewModelScope.launch {
             try {
                 acceptCommittedSnapshot(repository.purge())
+                clearReminder()
                 finishPurge(request, null)
             } catch (error: ReadingStorageException) {
                 finishPurge(request, PurgePhase.Failed(ReadingFailure(error.category, ReadingAction.PURGE)))
@@ -512,6 +520,16 @@ class TrackerViewModel(
 
     private fun finishPurge(request: ReadingRequest, phase: PurgePhase?) {
         state = state.copy(dialog = state.dialog.completePurge(request, state.sessionId, phase))
+    }
+
+    private fun scheduleReminderAfterSubmission() {
+        reminderStore?.setLastSubmissionMillis(System.currentTimeMillis())
+        reminderScheduler?.schedule()
+    }
+
+    private fun clearReminder() {
+        reminderStore?.clearLastSubmissionMillis()
+        reminderScheduler?.cancel()
     }
 
     private fun finishSave(request: ReadingRequest, phase: SavePhase?) {
@@ -569,10 +587,17 @@ class TrackerViewModel(
         fun factory(
             repository: ReadingRepository,
             temperature: TemperatureServices? = null,
+            reminderStore: ReminderStore? = null,
+            reminderScheduler: ReminderScheduler? = null,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 require(modelClass == TrackerViewModel::class.java)
-                return modelClass.cast(TrackerViewModel(repository = repository, temperature = temperature))!!
+                return modelClass.cast(TrackerViewModel(
+                    repository = repository,
+                    temperature = temperature,
+                    reminderStore = reminderStore,
+                    reminderScheduler = reminderScheduler,
+                ))!!
             }
         }
     }

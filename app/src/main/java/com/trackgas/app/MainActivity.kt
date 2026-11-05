@@ -3,6 +3,10 @@ package com.trackgas.app
 import android.os.Bundle
 import android.graphics.Color
 import android.app.ActivityManager
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,6 +24,10 @@ import java.util.UUID
  * The application retains each activity's tracker across activity destruction within the process.
  */
 class MainActivity : AppCompatActivity() {
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            (application as TrackGasApplication).reminderStore.setPermissionDeclined(!granted)
+        }
     private lateinit var trackerId: String
     private lateinit var csvPickerCoordinator: CsvDocumentPickerCoordinator
     private val tracker by lazy {
@@ -28,12 +36,18 @@ class MainActivity : AppCompatActivity() {
         val store = app.trackerStoreOwner.obtain(trackerId, taskId, activeTasks)
         ViewModelProvider(
             store,
-            TrackerViewModel.factory(app.readingRepository, app.temperatureServices),
+            TrackerViewModel.factory(
+                app.readingRepository,
+                app.temperatureServices,
+                app.reminderStore,
+                app.reminderScheduler,
+            ),
         )[TrackerViewModel::class.java]
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestNotificationPermissionIfNeeded()
         trackerId = savedInstanceState?.getString(TRACKER_ID) ?: UUID.randomUUID().toString()
         csvPickerCoordinator = CsvDocumentPickerCoordinator(
             activityResultRegistry,
@@ -53,6 +67,16 @@ class MainActivity : AppCompatActivity() {
     internal fun startExport() = csvPickerCoordinator.startExport()
 
     internal fun startImport() = csvPickerCoordinator.startImport()
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val store = (application as TrackGasApplication).reminderStore
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            store.setPermissionDeclined(false)
+        } else if (!store.permissionDeclined()) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString(TRACKER_ID, trackerId)
