@@ -1,0 +1,94 @@
+name: Release APK
+
+on:
+  push:
+    branches:
+      - delivery
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure release signing
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_KEYSTORE_BASE64" || -z "$RELEASE_KEYSTORE_PASSWORD" || -z "$RELEASE_KEY_ALIAS" || -z "$RELEASE_KEY_PASSWORD" ]]; then
+            echo "::error::Configure all four release signing secrets before publishing."
+            exit 1
+          fi
+
+          keystore_path="$RUNNER_TEMP/trackgas-release.jks"
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          {
+            echo "RELEASE_KEYSTORE_PATH=$keystore_path"
+            echo "RELEASE_KEYSTORE_PASSWORD=$RELEASE_KEYSTORE_PASSWORD"
+            echo "RELEASE_KEY_ALIAS=$RELEASE_KEY_ALIAS"
+            echo "RELEASE_KEY_PASSWORD=$RELEASE_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Read version and check release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_name="$(awk -F '"' '/^[[:space:]]*versionName[[:space:]]*=/ { print $2; exit }' app/build.gradle.kts)"
+          if [[ -z "$version_name" ]]; then
+            echo "::error::Could not read versionName from app/build.gradle.kts."
+            exit 1
+          fi
+
+          tag="v${version_name}"
+          remote_tags="$(git ls-remote --tags --refs origin)"
+          if awk -v ref="refs/tags/${tag}" '$2 == ref { found = 1 } END { exit !found }' <<< "$remote_tags"; then
+            echo "::error::Release tag ${tag} already exists. Bump versionName in app/build.gradle.kts before publishing."
+            exit 1
+          fi
+
+          echo "name=${version_name}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assembleRelease
+          apk_path="app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$apk_path" ]]; then
+            echo "::error::Release APK was not produced at ${apk_path}."
+            exit 1
+          fi
+          mv "$apk_path" "TrackGas-${VERSION_NAME}.apk"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          APK_PATH: TrackGas-${{ steps.version.outputs.name }}.apk
+        run: |
+          gh release create "$RELEASE_TAG" "$APK_PATH" \
+            --title "TrackGas ${VERSION_NAME}" \
+            --generate-notes \
+            --target "$GITHUB_SHA"

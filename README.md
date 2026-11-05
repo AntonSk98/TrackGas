@@ -92,6 +92,10 @@ Run JVM tests from Git Bash with:
 
 The debug APK is `app/build/outputs/apk/debug/app-debug.apk`.
 
+## Release deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for keystore setup and the release checklist.
+
 ## Project structure
 
 - `app/src/main/java`: Compose UI, ViewModel, tracker policies, and Room repository.
