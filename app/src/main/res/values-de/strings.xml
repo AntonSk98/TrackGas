@@ -1,5 +1,9 @@
 <resources>
     <string name="app_name">TrackGas</string>
+    <string name="location_permission_title">Warum Standortzugriff?</string>
+    <string name="location_permission_body">Der Standortzugriff ermöglicht TrackGas, Außentemperaturen für Ihre erfassten Tage abzurufen.</string>
+    <string name="location_permission_continue">Weiter</string>
+    <string name="location_permission_not_now">Jetzt nicht</string>
     <string name="language">Sprache</string>
     <string name="language_english" translatable="false">English</string>
     <string name="language_german" translatable="false">Deutsch</string>

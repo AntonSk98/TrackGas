@@ -7,11 +7,15 @@ Provide a minimal offline Android entry point that establishes a working native 
 ## Requirements
 
 ### Requirement: Offline application launch
-The installed app SHALL launch to the gas consumption dashboard without connectivity, an account, a server, or runtime permission prompts.
+The installed app SHALL launch to the gas consumption dashboard without connectivity, an account, or a server. It SHALL NOT show a location explanation or permission prompt at launch. A location-dependent feature MAY request approximate location only after the user invokes that feature, and declining SHALL NOT block existing tracking features.
 
 #### Scenario: Launch in airplane mode
 - **WHEN** the user opens the installed app with connectivity disabled
-- **THEN** the gas consumption dashboard appears without a crash, network error, sign-in, or permission prompt
+- **THEN** the gas consumption dashboard appears without a crash, network error, sign-in, or location prompt
+
+#### Scenario: Launch without invoking a location-dependent feature
+- **WHEN** the user opens the app without invoking a location-dependent feature
+- **THEN** the dashboard appears without any location permission prompt regardless of the current permission state
 
 ### Requirement: Minimalist light interface
 The main screen SHALL display the app name "TrackGas" in a readable minimalist light interface with labelled Dashboard and History tabs, Dashboard selected initially, working period controls on Dashboard, an accessible top-right add-reading icon on either tab, and reading management in History when notes exist. The interface SHALL respect system insets and use labelled controls.

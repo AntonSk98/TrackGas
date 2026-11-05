@@ -1,5 +1,9 @@
 <resources>
     <string name="app_name">TrackGas</string>
+    <string name="location_permission_title">Why location access?</string>
+    <string name="location_permission_body">Location access lets TrackGas fetch outdoor temperatures for your tracked dates.</string>
+    <string name="location_permission_continue">Continue</string>
+    <string name="location_permission_not_now">Not now</string>
     <string name="language">Language</string>
     <string name="language_english" translatable="false">English</string>
     <string name="language_german" translatable="false">Deutsch</string>
