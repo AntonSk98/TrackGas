@@ -13,6 +13,8 @@ import androidx.room.Update
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.trackgas.app.tracking.*
+import com.trackgas.app.temperature.DailyTemperatureEntity
+import com.trackgas.app.temperature.TemperatureDao
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
@@ -96,6 +98,12 @@ interface ReadingDao {
     @Query("SELECT readings.* FROM readings LEFT JOIN installations ON readings.installationId = installations.id ORDER BY readings.date DESC, installations.startDate DESC, readings.id")
     suspend fun getAll(): List<ReadingEntity>
 
+    @Query("SELECT MIN(date) AS startDate, MAX(date) AS endDate FROM readings")
+    suspend fun dateRange(): StoredReadingDateRange
+
+    @Query("SELECT COUNT(*) FROM readings")
+    suspend fun count(): Int
+
     @Query("SELECT * FROM installations ORDER BY startDate, id")
     suspend fun getInstallations(): List<InstallationEntity>
 
@@ -136,9 +144,16 @@ interface ReadingDao {
     suspend fun deleteInstallations()
 }
 
-@Database(entities = [ReadingEntity::class, InstallationEntity::class, ReplacementEntity::class], version = 2, exportSchema = true)
+data class StoredReadingDateRange(val startDate: String?, val endDate: String?)
+
+@Database(
+    entities = [ReadingEntity::class, InstallationEntity::class, ReplacementEntity::class, DailyTemperatureEntity::class],
+    version = 3,
+    exportSchema = true,
+)
 abstract class ReadingDatabase : RoomDatabase() {
     abstract fun readings(): ReadingDao
+    abstract fun temperatures(): TemperatureDao
 
     companion object {
         val INITIALIZE = object : Callback() {
@@ -163,5 +178,12 @@ abstract class ReadingDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS daily_temperatures (date TEXT NOT NULL PRIMARY KEY, celsius TEXT NOT NULL)",
+                )
+            }
+        }
     }
 }

@@ -28,6 +28,6 @@ class PickerDatesTest {
         val value = BigDecimal("120.123456789")
         assertEquals("120,123456789", numberText(value, Locale.GERMANY, raw = true))
         assertEquals("120.123456789", numberText(value, Locale.US, raw = true))
-        assertEquals("120.123", numberText(value, Locale.US))
+        assertEquals("120.1", numberText(value, Locale.US))
     }
 }

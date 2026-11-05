@@ -11,9 +11,12 @@ import com.trackgas.app.tracking.MeterInstallation
 import com.trackgas.app.tracking.MeterReplacement
 import com.trackgas.app.tracking.ORIGINAL_INSTALLATION_ID
 import com.trackgas.app.tracking.TrackerData
+import com.trackgas.app.temperature.TemperatureAggregation
 import com.trackgas.app.tracking.chartAmountText
 import com.trackgas.app.tracking.chartAxisText
 import com.trackgas.app.tracking.chartProjection
+import com.trackgas.app.tracking.temperatureSegments
+import com.trackgas.app.tracking.TemperatureChartEntry
 import com.trackgas.app.tracking.dashboard
 import com.trackgas.app.tracking.weeklyRows
 import java.math.BigDecimal
@@ -76,6 +79,68 @@ class ChartProjectionTest {
         assertEquals(0, projected.scale.signum())
         assertEquals(0, projected.cubicMetresAt(0.5).signum())
         assertEquals(31, projected.positionCount)
+    }
+
+    @Test fun temperaturePointsAlignByDayKeepGapsAndDoNotChangeConsumptionBars() {
+        val data = snapshot(bucket("2026-10-01", "2"), bucket("2026-10-03", "4"))
+        val before = chartProjection(october, data)
+        val temperatures = mapOf(
+            LocalDate.parse("2026-10-01") to BigDecimal("8"),
+            LocalDate.parse("2026-10-03") to BigDecimal("10"),
+        )
+        val after = chartProjection(october, data, temperatures)
+
+        assertEquals(before.entries, after.entries)
+        assertEquals(listOf(0, 2), after.temperatures.map { it.offset })
+        assertEquals(listOf(BigDecimal("8"), BigDecimal("10")), after.temperatures.map { it.celsius })
+        assertEquals(
+            listOf(listOf(0), listOf(2)),
+            temperatureSegments(after.temperatures).map { segment -> segment.map { it.offset } },
+        )
+    }
+
+    @Test fun temperatureWithoutAConsumptionBarIsNotPlotted() {
+        val data = snapshot(bucket("2026-10-01", "2"))
+        val temperatures = mapOf(
+            LocalDate.parse("2026-10-01") to BigDecimal("8"),
+            LocalDate.parse("2026-10-02") to BigDecimal("9"),
+        )
+
+        assertEquals(listOf(0), chartProjection(october, data, temperatures).temperatures.map { it.offset })
+    }
+
+    @Test fun weeklyRowTemperatureMeansMatchDailyChartTooltipValues() {
+        val temperatures = mapOf(
+            LocalDate.parse("2026-10-05") to BigDecimal("4"),
+            LocalDate.parse("2026-10-06") to BigDecimal("6"),
+            LocalDate.parse("2026-10-07") to BigDecimal("8"),
+        )
+        val period = CalendarPeriod(PeriodType.WEEK, LocalDate.parse("2026-10-05"))
+        val dashboard = snapshot(
+            bucket("2026-10-05", "2"),
+            bucket("2026-10-06", "3"),
+            bucket("2026-10-07", "4"),
+        )
+        val rowMeans = temperatures.keys.associateWith { date ->
+            requireNotNull(TemperatureAggregation.mean(date..date, temperatures))
+        }
+        val tooltipTemperatures = chartProjection(period, dashboard, temperatures).temperatures
+            .associate { entry -> period.start.plusDays(entry.offset.toLong()) to entry.celsius }
+
+        assertEquals(rowMeans, tooltipTemperatures)
+    }
+
+    @Test fun yearTemperatureProjectionUsesMonthlyMeansAndPreservesEmptyMonths() {
+        val data = snapshot(bucket("2026-10-01", "2"))
+        val temperatures = mapOf(
+            LocalDate.parse("2026-10-01") to BigDecimal("8"),
+            LocalDate.parse("2026-10-31") to BigDecimal("10"),
+        )
+
+        val projected = chartProjection(year, data, temperatures)
+
+        assertEquals(listOf(9), projected.temperatures.map { it.offset })
+        assertEquals(listOf(BigDecimal("9")), projected.temperatures.map { it.celsius })
     }
 
     @Test fun unknownBucketDoesNotBecomeAZeroMark() {
@@ -270,7 +335,7 @@ class ChartProjectionTest {
     }
 
     @Test fun axisLabelsAreLocalizedAndExtremeMagnitudesStayCompact() {
-        assertEquals("12,125", chartAmountText(BigDecimal("12.125"), Locale.GERMANY))
+        assertEquals("12,1", chartAmountText(BigDecimal("12.125"), Locale.GERMANY))
         assertEquals("0", chartAmountText(BigDecimal.ZERO, Locale.GERMANY))
         assertEquals("1,25E1000", chartAmountText(BigDecimal("1.25E+1000"), Locale.GERMANY))
         assertEquals("1,25E-1000", chartAmountText(BigDecimal("1.25E-1000"), Locale.GERMANY))

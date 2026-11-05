@@ -3,8 +3,10 @@ package com.trackgas.app.tracking
 import java.math.BigDecimal
 import java.math.MathContext
 import java.time.DayOfWeek
+import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
+import com.trackgas.app.temperature.TemperatureAggregation
 
 internal data class ChartEntry(
     val range: DateRange,
@@ -20,12 +22,18 @@ internal data class ChartProjection(
     val positionCount: Int,
     val scale: BigDecimal,
     val entries: List<ChartEntry>,
+    val temperatures: List<TemperatureChartEntry> = emptyList(),
 ) {
     fun cubicMetresAt(normalizedY: Double): BigDecimal {
         require(normalizedY.isFinite() && normalizedY in 0.0..1.0)
         return scale.multiply(BigDecimal.valueOf(normalizedY))
     }
 }
+
+internal data class TemperatureChartEntry(
+    val offset: Int,
+    val celsius: BigDecimal,
+)
 
 /** Groups covered daily Month buckets into clipped Monday–Sunday display rows. */
 internal fun weeklyRows(period: CalendarPeriod, buckets: List<ConsumptionBucket>): List<ConsumptionBucket> {
@@ -63,7 +71,11 @@ internal fun weeklyRows(period: CalendarPeriod, buckets: List<ConsumptionBucket>
 }
 
 /** Copies covered buckets, never deriving consumption or a total from chart coordinates. */
-internal fun chartProjection(period: CalendarPeriod, dashboard: Dashboard): ChartProjection {
+internal fun chartProjection(
+    period: CalendarPeriod,
+    dashboard: Dashboard,
+    temperatures: Map<LocalDate, BigDecimal> = emptyMap(),
+): ChartProjection {
     val buckets = dashboard.buckets.filter { it.amount.cubicMetres != null }.sortedBy { it.range.start }
     val scale = buckets.maxOfOrNull { requireNotNull(it.amount.cubicMetres) } ?: BigDecimal.ZERO
     val count = if (period.type == PeriodType.YEAR) 12 else period.range.days.toInt()
@@ -86,5 +98,15 @@ internal fun chartProjection(period: CalendarPeriod, dashboard: Dashboard): Char
             },
         )
     }
-    return ChartProjection(period, count, scale, entries)
+    // Temperature is plotted only where a consumption bar exists, so both series share the same x positions.
+    val temperatureEntries = entries.mapNotNull { entry ->
+        val range = if (period.type == PeriodType.YEAR) {
+            val start = period.start.plusMonths(entry.offset.toLong())
+            start..start.plusMonths(1).minusDays(1)
+        } else {
+            entry.range.start..entry.range.endInclusive
+        }
+        TemperatureAggregation.mean(range, temperatures)?.let { TemperatureChartEntry(entry.offset, it) }
+    }
+    return ChartProjection(period, count, scale, entries, temperatureEntries)
 }

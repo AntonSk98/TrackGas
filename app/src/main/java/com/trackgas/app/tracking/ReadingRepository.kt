@@ -92,6 +92,12 @@ interface ReadingRepository {
      */
     fun observeReadings(): Flow<CommittedSnapshot>
 
+    /** Returns the inclusive first-to-last reading date range, or null when no readings exist. */
+    suspend fun readingDateRange(): DateRange? = null
+
+    /** Returns the number of persisted readings used to decide whether weather can be displayed. */
+    suspend fun readingCount(): Int = 0
+
     /**
      * Validates against the latest persisted rows and writes atomically, retaining Edit identity/date.
      *

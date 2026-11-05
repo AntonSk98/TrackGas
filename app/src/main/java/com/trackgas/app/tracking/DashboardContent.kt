@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.trackgas.app.R
+import com.trackgas.app.temperature.TemperatureAggregation
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -44,6 +45,7 @@ import java.util.Locale
 internal fun LazyListScope.dashboardItems(
     period: CalendarPeriod,
     dashboard: Dashboard,
+    temperatures: Map<LocalDate, java.math.BigDecimal>,
     locale: Locale,
     onSelectPeriod: (PeriodType) -> Unit,
     onNavigate: (Long) -> Unit,
@@ -98,7 +100,14 @@ internal fun LazyListScope.dashboardItems(
                         style = MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.primary,
                     )
-                    ConsumptionChart(period, dashboard, locale, Modifier.fillMaxWidth())
+                    ConsumptionChart(
+                        period,
+                        dashboard,
+                        temperatures,
+                        locale,
+                        TemperatureAggregation.mean(period, temperatures),
+                        Modifier.fillMaxWidth(),
+                    )
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -146,7 +155,16 @@ internal fun LazyListScope.dashboardItems(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    ConsumptionValue(bucket.amount, locale)
+                    Column(horizontalAlignment = Alignment.End) {
+                        ConsumptionValue(bucket.amount, locale)
+                        TemperatureAggregation.mean(bucket.range.start..bucket.range.endInclusive, temperatures)?.let { mean ->
+                            Text(
+                                stringResource(R.string.temperature, numberText(mean, locale)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 }
                 HorizontalDivider()
             }

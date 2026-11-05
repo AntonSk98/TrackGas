@@ -6,24 +6,48 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.trackgas.app.temperature.MeterLocation
+import com.trackgas.app.temperature.TemperatureServices
 import java.io.OutputStream
 import java.io.InputStream
 import java.io.IOException
+import java.math.BigDecimal
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.time.LocalDate
 import java.util.Locale
 import java.util.UUID
+import java.util.logging.Logger
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class TrackerTab { DASHBOARD, HISTORY }
 enum class ReadingLoadState { LOADING, READY, ERROR }
+
+enum class LocationLookupError { NOT_FOUND, UNAVAILABLE }
+
+sealed interface LocationLookupState {
+    data object Ready : LocationLookupState
+    data object Resolving : LocationLookupState
+    data class Error(val reason: LocationLookupError) : LocationLookupState
+}
+
+sealed interface MeterLocationDialog {
+    data object Closed : MeterLocationDialog
+    data class Editing(
+        val query: String,
+        val selected: MeterLocation?,
+        val suggestions: List<MeterLocation> = emptyList(),
+        val requestedAfterAdd: Boolean = false,
+        val lookup: LocationLookupState = LocationLookupState.Ready,
+    ) : MeterLocationDialog
+}
 
 sealed interface ExportState {
     data object Idle : ExportState
@@ -51,6 +75,9 @@ data class TrackerState(
     val loadState: ReadingLoadState = ReadingLoadState.LOADING,
     val loadFailure: ReadingFailure? = null,
     val dialog: ReadingDialog = ReadingDialog.Closed,
+    val locationDialog: MeterLocationDialog = MeterLocationDialog.Closed,
+    val meterLocation: MeterLocation? = null,
+    val temperatures: Map<LocalDate, BigDecimal> = emptyMap(),
     val sessionId: String = UUID.randomUUID().toString(),
     val tracker: TrackerData = TrackerData(readings),
     val export: ExportState = ExportState.Idle,
@@ -61,17 +88,20 @@ data class TrackerState(
 class TrackerViewModel(
     private val repository: ReadingRepository,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val temperature: TemperatureServices? = null,
     private val currentDate: () -> LocalDate = { LocalDate.now() },
 ) : ViewModel() {
     private val initialPeriod = CalendarPeriod.containing(PeriodType.WEEK, today())
     var state by mutableStateOf(TrackerState(emptyList(), initialPeriod, dashboard(emptyList(), initialPeriod)))
         private set
     private var observation: Job? = null
+    private var suggestionJob: Job? = null
     private var observationGeneration = 0L
     private var acceptedRevision = Long.MIN_VALUE
 
     init {
         observeReadings()
+        observeTemperatures()
     }
 
     fun today(): LocalDate = currentDate()
@@ -202,6 +232,7 @@ class TrackerViewModel(
                     is CsvImportCommitResult.Committed -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishCsvImport(preview.requestId, CsvImportState.Complete(preview.requestId, preview.preview.changes.size))
+                        temperature?.checks?.requestCheck()
                     }
                     is CsvImportCommitResult.Rejected -> finishCsvImport(
                         preview.requestId, CsvImportState.Failed(preview.requestId, result.error),
@@ -256,6 +287,23 @@ class TrackerViewModel(
         }
     }
 
+    private fun observeTemperatures() {
+        val source = temperature?.temperatures ?: return
+        viewModelScope.launch {
+            try {
+                source.observe().collect { temperatures ->
+                    state = state.copy(temperatures = temperatures.toMap())
+                    project(state.tracker, state.period)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                Logger.getLogger(TrackerViewModel::class.java.name)
+                    .warning("Could not observe stored temperatures")
+            }
+        }
+    }
+
     fun openAdd() = open(ReadingDialog.Editing(newId(), ReadingTarget.Add(today())))
 
     fun openEdit(reading: Reading) = open(ReadingDialog.Editing(newId(), ReadingTarget.Edit(reading)))
@@ -265,6 +313,93 @@ class TrackerViewModel(
     ))
 
     fun openPurge() = open(ReadingDialog.ConfirmingPurge(newId()))
+
+    fun openMeterLocation() {
+        if (state.loadState != ReadingLoadState.READY || state.dialog.pending) return
+        val saved = temperature?.locationStore?.read()
+        state = state.copy(
+            meterLocation = saved,
+            locationDialog = MeterLocationDialog.Editing(saved?.displayName.orEmpty(), saved),
+        )
+    }
+
+    fun updateMeterLocationQuery(query: String) {
+        val dialog = state.locationDialog as? MeterLocationDialog.Editing ?: return
+        val placeName = query.filter { it.isLetter() || it.isWhitespace() || it in PLACE_PUNCTUATION }
+        if (placeName == dialog.query) return
+        suggestionJob?.cancel()
+        // Typing invalidates the previous pick: only a chosen suggestion can be saved.
+        state = state.copy(
+            locationDialog = dialog.copy(
+                query = placeName,
+                selected = null,
+                suggestions = emptyList(),
+                lookup = LocationLookupState.Ready,
+            ),
+        )
+        val search = placeName.trim()
+        if (search.length >= MIN_SUGGESTION_QUERY_LENGTH) {
+            suggestionJob = viewModelScope.launch {
+                delay(SUGGESTION_DEBOUNCE_MILLIS)
+                loadSuggestions(search)
+            }
+        }
+    }
+
+    fun selectMeterLocationSuggestion(location: MeterLocation) {
+        suggestionJob?.cancel()
+        updateLocationDialog {
+            it.copy(query = location.displayName, selected = location, suggestions = emptyList(), lookup = LocationLookupState.Ready)
+        }
+    }
+
+    fun dismissMeterLocationDialog() {
+        suggestionJob?.cancel()
+        state = state.copy(locationDialog = MeterLocationDialog.Closed)
+    }
+
+    fun saveMeterLocation() {
+        val location = (state.locationDialog as? MeterLocationDialog.Editing)?.selected ?: return
+        suggestionJob?.cancel()
+        viewModelScope.launch {
+            try {
+                val services = requireNotNull(temperature) { "Temperature services are not configured" }
+                val previous = withContext(ioDispatcher) { services.locationStore.read() }
+                withContext(ioDispatcher) { services.locationStore.save(location) }
+                state = state.copy(meterLocation = location, locationDialog = MeterLocationDialog.Closed)
+                if (previous != location) services.checks.requestLocationRefresh()
+                else services.checks.requestCheck()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                updateLocationDialog { it.copy(lookup = LocationLookupState.Error(LocationLookupError.UNAVAILABLE)) }
+            }
+        }
+    }
+
+    private suspend fun loadSuggestions(query: String) {
+        updateLocationDialog { it.copy(lookup = LocationLookupState.Resolving) }
+        val lookup = try {
+            val services = requireNotNull(temperature) { "Temperature services are not configured" }
+            if (!services.networkMonitor.isOnline()) {
+                LocationLookupState.Error(LocationLookupError.UNAVAILABLE)
+            } else {
+                val places = withContext(ioDispatcher) { services.locationResolver.suggest(query) }
+                updateLocationDialog { it.copy(suggestions = places) }
+                if (places.isEmpty()) LocationLookupState.Error(LocationLookupError.NOT_FOUND) else LocationLookupState.Ready
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            LocationLookupState.Error(LocationLookupError.UNAVAILABLE)
+        }
+        updateLocationDialog { it.copy(lookup = lookup) }
+    }
+
+    private fun updateLocationDialog(transform: (MeterLocationDialog.Editing) -> MeterLocationDialog.Editing) {
+        val dialog = state.locationDialog as? MeterLocationDialog.Editing ?: return
+        state = state.copy(locationDialog = transform(dialog))
+    }
 
     fun openReplacement() {
         if (state.loadState != ReadingLoadState.READY || state.dialog.pending) return
@@ -328,6 +463,8 @@ class TrackerViewModel(
                     is SaveReadingResult.Saved -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishSave(request, null)
+                        temperature?.checks?.requestCheck()
+                        if (dialog.target is ReadingTarget.Add) requestLocationAfterAdd()
                     }
                 }
             } catch (error: ReadingStorageException) {
@@ -349,6 +486,7 @@ class TrackerViewModel(
                     is DeleteReadingResult.Deleted -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishDelete(request, null)
+                        temperature?.checks?.requestCheck()
                     }
                 }
             } catch (error: ReadingStorageException) {
@@ -390,6 +528,19 @@ class TrackerViewModel(
 
     private fun newId() = UUID.randomUUID().toString()
 
+    private fun requestLocationAfterAdd() {
+        val saved = temperature?.locationStore?.read() ?: state.meterLocation
+        if (saved == null && temperature?.networkMonitor?.isOnline() == true) {
+            state = state.copy(
+                locationDialog = MeterLocationDialog.Editing(
+                    query = "",
+                    selected = null,
+                    requestedAfterAdd = true,
+                ),
+            )
+        }
+    }
+
     private fun acceptCommittedSnapshot(snapshot: CommittedSnapshot) {
         if (snapshot.revision <= acceptedRevision) return
         acceptedRevision = snapshot.revision
@@ -412,10 +563,16 @@ class TrackerViewModel(
     }
 
     companion object {
-        fun factory(repository: ReadingRepository): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+        private const val PLACE_PUNCTUATION = ",.'-"
+        private const val MIN_SUGGESTION_QUERY_LENGTH = 2
+        private const val SUGGESTION_DEBOUNCE_MILLIS = 400L
+        fun factory(
+            repository: ReadingRepository,
+            temperature: TemperatureServices? = null,
+        ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 require(modelClass == TrackerViewModel::class.java)
-                return modelClass.cast(TrackerViewModel(repository))!!
+                return modelClass.cast(TrackerViewModel(repository = repository, temperature = temperature))!!
             }
         }
     }

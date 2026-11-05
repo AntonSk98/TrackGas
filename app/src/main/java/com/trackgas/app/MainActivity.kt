@@ -26,7 +26,10 @@ class MainActivity : AppCompatActivity() {
         val app = application as TrackGasApplication
         val activeTasks = getSystemService(ActivityManager::class.java).appTasks.map { it.taskInfo.id }.toSet()
         val store = app.trackerStoreOwner.obtain(trackerId, taskId, activeTasks)
-        ViewModelProvider(store, TrackerViewModel.factory(app.readingRepository))[TrackerViewModel::class.java]
+        ViewModelProvider(
+            store,
+            TrackerViewModel.factory(app.readingRepository, app.temperatureServices),
+        )[TrackerViewModel::class.java]
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,6 +92,11 @@ private fun TrackGasApp(tracker: TrackerViewModel, onExport: () -> Unit, onImpor
             onReplaceMeter = tracker::replaceMeter,
             onOpenPurge = tracker::openPurge,
             onPurge = tracker::purge,
+            onOpenMeterLocation = tracker::openMeterLocation,
+            onUpdateMeterLocationQuery = tracker::updateMeterLocationQuery,
+            onSelectMeterLocation = tracker::selectMeterLocationSuggestion,
+            onSaveMeterLocation = tracker::saveMeterLocation,
+            onDismissMeterLocationDialog = tracker::dismissMeterLocationDialog,
             onExport = onExport,
             onImport = onImport,
             onConfirmCsvImport = tracker::confirmCsvImport,

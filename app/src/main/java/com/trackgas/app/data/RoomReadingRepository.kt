@@ -3,6 +3,7 @@ package com.trackgas.app.data
 import androidx.room.withTransaction
 import com.trackgas.app.tracking.*
 import java.util.UUID
+import java.time.LocalDate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -30,6 +31,19 @@ class RoomReadingRepository internal constructor(
             ordering.withLock { snapshot(database.withTransaction { readRows() }) }
         }.catch { failure -> throw classifyReadingFailure(failure) }
 
+    override suspend fun readingDateRange(): DateRange? = readingStorageOperation {
+        val dates = dao.dateRange()
+        val start = dates.startDate ?: return@readingStorageOperation null
+        val end = dates.endDate ?: return@readingStorageOperation null
+        try {
+            DateRange(LocalDate.parse(start), LocalDate.parse(end))
+        } catch (error: java.time.format.DateTimeParseException) {
+            throw StoredReadingDecodingException(error)
+        }
+    }
+
+    override suspend fun readingCount(): Int = readingStorageOperation { dao.count() }
+
     override suspend fun save(intent: SaveReadingIntent): SaveReadingResult = readingStorageOperation {
         ordering.withLock {
             val result = database.withTransaction {
@@ -47,6 +61,7 @@ class RoomReadingRepository internal constructor(
                 } else {
                     check(dao.update(candidate.toEntity()) == 1) { "Reading disappeared during update" }
                 }
+                database.temperatures().pruneOutsideReadingRange()
                 SaveRows.Accepted(readRows())
             }
             // withTransaction has returned successfully; only now issue a committed revision.
@@ -139,19 +154,20 @@ class RoomReadingRepository internal constructor(
                     when (candidate) {
                         is CsvImportCandidateValidation.Invalid -> ImportRows.Rejected(candidate.error)
                         is CsvImportCandidateValidation.Valid -> {
-                        val affected = preview.rows.map { it.installationId }.toSet()
-                        if (affected.isNotEmpty()) {
-                            // Remove links first, then rebuild only the imported meter records.
-                            dao.deleteReplacementsForInstallations(affected.toList())
-                            dao.deleteForInstallations(affected.toList())
-                            dao.deleteInstallationsById(affected.toList())
-                            candidate.tracker.installations.filter { it.id in affected }.forEach { installation ->
-                                dao.insertInstallation(InstallationEntity(
-                                    installation.id, installation.startDate?.toString(),
-                                ))
+                            val affected = preview.rows.map { it.installationId }.toSet()
+                            if (affected.isNotEmpty()) {
+                                // Remove links first, then rebuild only the imported meter records.
+                                dao.deleteReplacementsForInstallations(affected.toList())
+                                dao.deleteForInstallations(affected.toList())
+                                dao.deleteInstallationsById(affected.toList())
+                                candidate.tracker.installations.filter { it.id in affected }.forEach { installation ->
+                                    dao.insertInstallation(InstallationEntity(
+                                        installation.id, installation.startDate?.toString(),
+                                    ))
+                                }
+                                candidate.tracker.readings.filter { it.installationId in affected }.forEach { dao.insert(it.toEntity()) }
                             }
-                            candidate.tracker.readings.filter { it.installationId in affected }.forEach { dao.insert(it.toEntity()) }
-                        }
+                            database.temperatures().pruneOutsideReadingRange()
                             ImportRows.Accepted(readRows())
                         }
                     }
@@ -177,6 +193,7 @@ class RoomReadingRepository internal constructor(
                     DeletionValidation.PROTECTED -> DeleteRows.Protected
                     DeletionValidation.ALLOWED -> {
                         check(dao.delete(id) == 1) { "Reading disappeared during delete" }
+                        database.temperatures().pruneOutsideReadingRange()
                         DeleteRows.Accepted(readRows())
                     }
                 }
@@ -199,6 +216,7 @@ class RoomReadingRepository internal constructor(
                 // Remove dependent rows first and restore the required original installation.
                 dao.deleteReplacements()
                 dao.deleteReadings()
+                database.temperatures().deleteAll()
                 dao.deleteInstallations()
                 var id: String
                 do { id = UUID.randomUUID().toString() } while (before.installations.any { it.id == id })

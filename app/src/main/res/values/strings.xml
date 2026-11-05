@@ -1,9 +1,17 @@
 <resources>
     <string name="app_name">TrackGas</string>
-    <string name="location_permission_title">Why location access?</string>
-    <string name="location_permission_body">Location access lets TrackGas fetch outdoor temperatures for your tracked dates.</string>
-    <string name="location_permission_continue">Continue</string>
-    <string name="location_permission_not_now">Not now</string>
+    <string name="meter_location">Location</string>
+    <string name="meter_location_title">Location</string>
+    <string name="meter_location_description">Enter your meter’s city or address.</string>
+    <string name="meter_location_prompt">Set the meter location for local temperatures.</string>
+    <string name="meter_location_input_label">City or address</string>
+    <string name="meter_location_later">Later</string>
+    <string name="meter_location_not_found">No place found.</string>
+    <string name="meter_location_unavailable">Lookup failed. Check your connection.</string>
+    <string name="meter_location_resolving">Searching…</string>
+    <string name="temperature">%1$s °C</string>
+    <string name="temperature_mean">Avg. temperature: %1$s °C</string>
+    <string name="temperature_axis">%1$s °C</string>
     <string name="language">Language</string>
     <string name="language_english" translatable="false">English</string>
     <string name="language_german" translatable="false">Deutsch</string>

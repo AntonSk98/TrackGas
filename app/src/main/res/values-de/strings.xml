@@ -1,9 +1,17 @@
 <resources>
     <string name="app_name">TrackGas</string>
-    <string name="location_permission_title">Warum Standortzugriff?</string>
-    <string name="location_permission_body">Der Standortzugriff ermöglicht TrackGas, Außentemperaturen für Ihre erfassten Tage abzurufen.</string>
-    <string name="location_permission_continue">Weiter</string>
-    <string name="location_permission_not_now">Jetzt nicht</string>
+    <string name="meter_location">Standort</string>
+    <string name="meter_location_title">Standort</string>
+    <string name="meter_location_description">Stadt oder Adresse des Zählers eingeben.</string>
+    <string name="meter_location_prompt">Zählerstandort für lokale Temperaturen festlegen.</string>
+    <string name="meter_location_input_label">Stadt oder Adresse</string>
+    <string name="meter_location_later">Später</string>
+    <string name="meter_location_not_found">Kein Ort gefunden.</string>
+    <string name="meter_location_unavailable">Suche fehlgeschlagen. Verbindung prüfen.</string>
+    <string name="meter_location_resolving">Suche…</string>
+    <string name="temperature">%1$s °C</string>
+    <string name="temperature_mean">Ø Temperatur: %1$s °C</string>
+    <string name="temperature_axis">%1$s °C</string>
     <string name="language">Sprache</string>
     <string name="language_english" translatable="false">English</string>
     <string name="language_german" translatable="false">Deutsch</string>

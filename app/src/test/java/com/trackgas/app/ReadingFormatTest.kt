@@ -16,7 +16,7 @@ class ReadingFormatTest {
     @Test fun rawValuesKeepTrailingZerosForEditing() {
         assertEquals("100.0100", numberText(BigDecimal("100.0100"), Locale.US, raw = true))
         assertEquals("100,0100", numberText(BigDecimal("100.0100"), Locale.GERMANY, raw = true))
-        assertEquals("100.01", numberText(BigDecimal("100.0100"), Locale.US))
+        assertEquals("100", numberText(BigDecimal("100.0100"), Locale.US))
     }
 
     @Test fun weeksUseLocalizedWeekdaysEvenAcrossYears() {

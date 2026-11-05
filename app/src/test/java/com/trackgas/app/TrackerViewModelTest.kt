@@ -2,6 +2,13 @@ package com.trackgas.app
 
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import com.trackgas.app.temperature.LocationResolver
+import com.trackgas.app.temperature.MeterLocation
+import com.trackgas.app.temperature.MeterLocationStore
+import com.trackgas.app.temperature.NetworkMonitor
+import com.trackgas.app.temperature.TemperatureCheckRequester
+import com.trackgas.app.temperature.TemperatureRepository
+import com.trackgas.app.temperature.TemperatureServices
 import com.trackgas.app.tracking.*
 import java.time.LocalDate
 import java.io.ByteArrayInputStream
@@ -15,6 +22,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -100,6 +108,7 @@ class TrackerViewModelTest {
         vm.readCsvImport(request) {
             ByteArrayInputStream("meter_id;date;meter_value\n$meterId;${imported.date};100.2500\n".toByteArray())
         }
+
         runCurrent()
         assertEquals(CsvImportState.Preview(request, preview), vm.state.csvImport)
 
@@ -120,6 +129,83 @@ class TrackerViewModelTest {
         assertTrue(vm.state.csvImport is CsvImportState.Complete)
         vm.acknowledgeCsvImport(request)
         assertEquals(CsvImportState.Idle, vm.state.csvImport)
+    }
+
+    @Test fun committedSaveDeleteAndCsvImportRequestTemperatureChecks() = runTest {
+        val meterId = "11111111-1111-4111-8111-111111111111"
+        val original = TrackerData(
+            listOf(one.copy(installationId = meterId)),
+            listOf(MeterInstallation(meterId)),
+        )
+        val repo = ScriptedReadingRepository()
+        val checks = CountingCheckRequester()
+        val vm = TrackerViewModel(
+            repository = repo,
+            ioDispatcher = dispatcher,
+            temperature = TemperatureServices(
+                locationResolver = object : LocationResolver {
+                    override fun suggest(query: String): List<MeterLocation> = emptyList()
+                },
+                locationStore = object : MeterLocationStore {
+                    override fun read(): MeterLocation? = null
+                    override fun save(location: MeterLocation) = Unit
+                },
+                networkMonitor = object : NetworkMonitor {
+                    override fun isOnline() = false
+                    override fun addOnAvailableListener(listener: () -> Unit) = AutoCloseable {}
+                },
+                temperatures = object : TemperatureRepository {
+                    override fun observe() = emptyFlow<Map<LocalDate, java.math.BigDecimal>>()
+                    override suspend fun storedDates() = emptySet<LocalDate>()
+                    override suspend fun upsert(temperatures: Map<LocalDate, java.math.BigDecimal>) = Unit
+                    override suspend fun deleteAll() = Unit
+                },
+                checks = checks,
+            ),
+            currentDate = { today },
+        )
+        repo.deliver(original)
+        runCurrent()
+
+        vm.openAdd()
+        repo.saveOutcomes.send(Result.success(SaveReadingResult.Saved(CommittedSnapshot(2, original.copy(
+            readings = original.readings + two.copy(installationId = meterId),
+        )))))
+        vm.save(today, "112.1250", Locale.US)
+        runCurrent()
+        assertEquals(1, checks.requests)
+
+        val added = vm.state.readings.single { it.date == two.date }
+        repo.deleteOutcomes.send(Result.success(DeleteReadingResult.Deleted(
+            CommittedSnapshot(3, original),
+        )))
+        vm.openDelete(added)
+        vm.delete()
+        runCurrent()
+        assertEquals(2, checks.requests)
+
+        val preview = CsvImportPreview(
+            "temperature-check-import",
+            3,
+            listOf(CsvImportMeterChange(meterId, 1, 1)),
+            0,
+            original,
+            listOf(CsvReadingRow(meterId, today.minusDays(2), "99".toBigDecimal(), 2)),
+        )
+        repo.csvCommitOutcomes.send(Result.success(CsvImportCommitResult.Committed(
+            CommittedSnapshot(4, original),
+        )))
+        val importRequest = requireNotNull(vm.requestCsvImport())
+        repo.csvPreviewOutcomes.send(Result.success(CsvImportPreviewResult.Ready(preview)))
+        vm.readCsvImport(importRequest) {
+            ByteArrayInputStream(
+                "meter_id;date;meter_value\n$meterId;${today.minusDays(2)};99\n".toByteArray(),
+            )
+        }
+        runCurrent()
+        vm.confirmCsvImport()
+        runCurrent()
+        assertEquals(3, checks.requests)
     }
 
     @Test fun csvPickerCancellationIsNoOpAndReadErrorsUseSafeStableCode() = runTest {
@@ -856,6 +942,13 @@ class TrackerViewModelTest {
 }
 
 /** Scripts only: never looks up targets, validates, generates IDs, sorts, or mutates records. */
+private class CountingCheckRequester : TemperatureCheckRequester {
+    var requests = 0
+    var locationRefreshes = 0
+    override fun requestCheck() { requests++ }
+    override fun requestLocationRefresh() { locationRefreshes++ }
+}
+
 private class ScriptedReadingRepository : ReadingRepository {
     private val observations = Channel<Result<CommittedSnapshot>>(Channel.UNLIMITED)
     val saveOutcomes = Channel<Result<SaveReadingResult>>(Channel.UNLIMITED)

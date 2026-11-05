@@ -1,8 +1,11 @@
 package com.trackgas.app.tracking
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -11,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -20,6 +24,9 @@ import com.patrykandpatrick.vico.compose.cartesian.axis.rememberAxisLabelCompone
 import com.patrykandpatrick.vico.compose.cartesian.axis.rememberBottom
 import com.patrykandpatrick.vico.compose.cartesian.axis.rememberStart
 import com.patrykandpatrick.vico.compose.cartesian.layer.rememberColumnCartesianLayer
+import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLayer
+import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLine
+import com.patrykandpatrick.vico.compose.cartesian.layer.point
 import com.patrykandpatrick.vico.compose.cartesian.marker.rememberDefaultCartesianMarker
 import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
 import com.patrykandpatrick.vico.compose.cartesian.rememberVicoScrollState
@@ -33,6 +40,7 @@ import com.patrykandpatrick.vico.compose.common.insets
 import com.patrykandpatrick.vico.compose.m3.common.rememberM3VicoTheme
 import com.patrykandpatrick.vico.core.cartesian.Zoom
 import com.patrykandpatrick.vico.core.cartesian.CartesianDrawingContext
+import com.patrykandpatrick.vico.core.cartesian.axis.BaseAxis
 import com.patrykandpatrick.vico.core.cartesian.axis.HorizontalAxis
 import com.patrykandpatrick.vico.core.cartesian.axis.VerticalAxis
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
@@ -40,7 +48,9 @@ import com.patrykandpatrick.vico.core.cartesian.data.CartesianLayerRangeProvider
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianValueFormatter
 import com.patrykandpatrick.vico.core.cartesian.data.ColumnCartesianLayerModel
 import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
+import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 import com.patrykandpatrick.vico.core.cartesian.layer.ColumnCartesianLayer
+import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
 import com.patrykandpatrick.vico.core.cartesian.marker.DefaultCartesianMarker
 import com.patrykandpatrick.vico.core.cartesian.marker.CartesianMarker
 import com.patrykandpatrick.vico.core.common.DrawingContext
@@ -59,10 +69,12 @@ import kotlin.math.roundToInt
 internal fun ConsumptionChart(
     period: CalendarPeriod,
     dashboard: Dashboard,
+    temperatures: Map<java.time.LocalDate, BigDecimal>,
     locale: Locale,
+    averageTemperature: BigDecimal?,
     modifier: Modifier = Modifier,
 ) {
-    val projection = chartProjection(period, dashboard)
+    val projection = chartProjection(period, dashboard, temperatures)
     if (projection.entries.isEmpty()) return
 
     val colors = MaterialTheme.colorScheme
@@ -76,7 +88,20 @@ internal fun ConsumptionChart(
         // A snapshot owns its producer/host. While the new transaction is being collected,
         // no frame may show an old model under the new dates or decimal scale.
         key(projection) {
-            ProjectedConsumptionChart(projection, locale, modifier)
+            Column(modifier) {
+                ProjectedConsumptionChart(projection, locale)
+                if (projection.temperatures.isNotEmpty()) {
+                    averageTemperature?.let { mean ->
+                        Text(
+                            stringResource(R.string.temperature_mean, numberText(mean, locale)),
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    ProjectedTemperatureChart(projection, locale)
+                }
+            }
         }
     }
 }
@@ -85,16 +110,17 @@ internal fun ConsumptionChart(
 private fun ProjectedConsumptionChart(
     projection: ChartProjection,
     locale: Locale,
-    modifier: Modifier,
 ) {
     val producer = remember { CartesianChartModelProducer() }
     LaunchedEffect(producer, projection) {
         producer.runTransaction {
-            columnSeries {
-                series(
-                    x = projection.entries.map { it.offset },
-                    y = projection.entries.map { it.normalizedY },
-                )
+            if (projection.entries.isNotEmpty()) {
+                columnSeries {
+                    series(
+                        x = projection.entries.map { it.offset },
+                        y = projection.entries.map { it.normalizedY },
+                    )
+                }
             }
         }
     }
@@ -142,15 +168,24 @@ private fun ProjectedConsumptionChart(
         PeriodType.MONTH -> 10
         PeriodType.YEAR -> 3
     }
-    val marker = consumptionMarker(projection, locale)
-    var inspecting by remember { mutableStateOf(false) }
-    val inspectionMarker = remember(marker) {
-        object : CartesianMarker by marker {
-            override fun drawOverLayers(context: CartesianDrawingContext, targets: List<CartesianMarker.Target>) {
-                if (inspecting) marker.drawOverLayers(context, targets)
-            }
-        }
-    }
+    val resources = LocalContext.current.resources
+    val inspection = rememberInspection(
+        chartMarker(projection, locale, DefaultCartesianMarker.LabelPosition.Top, MaterialTheme.colorScheme.primary) { offset ->
+            projection.entries.firstOrNull { it.offset == offset }
+                ?.let { resources.getString(R.string.volume, numberText(it.cubicMetres, locale)) }
+        },
+    )
+    val startAxis = VerticalAxis.rememberStart(
+        valueFormatter = amountFormatter,
+        itemPlacer = remember(projection.scale) {
+            VerticalAxis.ItemPlacer.count(count = { if (projection.scale.signum() == 0) 1 else 3 })
+        },
+        size = Y_AXIS_SIZE,
+        title = stringResource(R.string.volume, "").trim(),
+        titleComponent = rememberAxisLabelComponent(),
+        tick = null,
+        line = null,
+    )
     CartesianChartHost(
         chart = rememberCartesianChart(
             rememberColumnCartesianLayer(
@@ -158,16 +193,7 @@ private fun ProjectedConsumptionChart(
                 columnCollectionSpacing = 4.dp,
                 rangeProvider = range,
             ),
-            startAxis = VerticalAxis.rememberStart(
-                valueFormatter = amountFormatter,
-                itemPlacer = remember(projection.scale) {
-                    VerticalAxis.ItemPlacer.count(count = { if (projection.scale.signum() == 0) 1 else 3 })
-                },
-                title = stringResource(R.string.volume, "").trim(),
-                titleComponent = rememberAxisLabelComponent(),
-                tick = null,
-                line = null,
-            ),
+            startAxis = startAxis,
             bottomAxis = HorizontalAxis.rememberBottom(
                 valueFormatter = dateFormatter,
                 itemPlacer = remember(spacing) {
@@ -176,18 +202,11 @@ private fun ProjectedConsumptionChart(
                 guideline = null,
                 tick = null,
             ),
-            marker = inspectionMarker,
+            marker = inspection.marker,
             getXStep = { 1.0 },
         ),
         modelProducer = producer,
-        modifier = modifier.height(220.dp).pointerInput(Unit) {
-            detectDragGesturesAfterLongPress(
-                onDragStart = { inspecting = true },
-                onDragEnd = { inspecting = false },
-                onDragCancel = { inspecting = false },
-                onDrag = { change, _ -> change.consume() },
-            )
-        },
+        modifier = Modifier.height(220.dp).then(inspection.modifier),
         scrollState = rememberVicoScrollState(scrollEnabled = false),
         zoomState = rememberVicoZoomState(
             zoomEnabled = false,
@@ -200,36 +219,170 @@ private fun ProjectedConsumptionChart(
     )
 }
 
+/** Builds a long-press tooltip with the bucket date and [details] for the touched x offset. */
 @Composable
-private fun consumptionMarker(projection: ChartProjection, locale: Locale): DefaultCartesianMarker {
+private fun chartMarker(
+    projection: ChartProjection,
+    locale: Locale,
+    labelPosition: DefaultCartesianMarker.LabelPosition,
+    accent: Color,
+    details: (Int) -> String?,
+): DefaultCartesianMarker {
     val colors = MaterialTheme.colorScheme
     val resources = LocalContext.current.resources
     val valueFormatter = remember(projection, locale, resources) {
         DefaultCartesianMarker.ValueFormatter { _, targets ->
-            val entry = projection.entries.single { it.offset.toDouble() == targets.single().x }
-            resources.getString(
-                R.string.chart_marker,
-                bucketText(entry.range.start, projection.period.type, locale, padDay = true),
-                resources.getString(R.string.volume, numberText(entry.cubicMetres, locale)),
-            )
+            val offset = targets.firstOrNull()?.x?.roundToInt()
+            if (offset == null) {
+                ""
+            } else {
+                val date = if (projection.period.type == PeriodType.YEAR) {
+                    projection.period.start.plusMonths(offset.toLong())
+                } else {
+                    projection.period.start.plusDays(offset.toLong())
+                }
+                resources.getString(
+                    R.string.chart_marker,
+                    bucketText(date, projection.period.type, locale, padDay = true),
+                    details(offset).orEmpty(),
+                )
+            }
         }
     }
     return rememberDefaultCartesianMarker(
         label = rememberTextComponent(
-            color = colors.onPrimary,
+            color = MaterialTheme.colorScheme.onPrimary,
             textSize = MaterialTheme.typography.labelLarge.fontSize,
             lineCount = 2,
             padding = insets(horizontal = 12.dp, vertical = 8.dp),
             background = rememberShapeComponent(
-                fill = fill(colors.primary),
+                fill = fill(accent),
                 shape = CorneredShape.rounded(8f),
             ),
         ),
         valueFormatter = valueFormatter,
-        labelPosition = DefaultCartesianMarker.LabelPosition.Top,
-        guideline = rememberLineComponent(fill(colors.primary.copy(alpha = 0.35f)), thickness = 1.dp),
+        labelPosition = labelPosition,
+        guideline = rememberLineComponent(fill(accent.copy(alpha = 0.35f)), thickness = 1.dp),
     )
 }
+
+/** A marker that only draws while a long press is held, plus the gesture modifier driving it. */
+private class Inspection(val marker: CartesianMarker, val modifier: Modifier)
+
+@Composable
+private fun rememberInspection(marker: DefaultCartesianMarker): Inspection {
+    var inspecting by remember { mutableStateOf(false) }
+    val inspectionMarker = remember(marker) {
+        object : CartesianMarker by marker {
+            override fun drawOverLayers(context: CartesianDrawingContext, targets: List<CartesianMarker.Target>) {
+                if (inspecting) marker.drawOverLayers(context, targets)
+            }
+        }
+    }
+    val gesture = Modifier.pointerInput(Unit) {
+        detectDragGesturesAfterLongPress(
+            onDragStart = { inspecting = true },
+            onDragEnd = { inspecting = false },
+            onDragCancel = { inspecting = false },
+            onDrag = { change, _ -> change.consume() },
+        )
+    }
+    return Inspection(inspectionMarker, gesture)
+}
+
+internal fun temperatureSegments(
+    entries: List<TemperatureChartEntry>,
+): List<List<TemperatureChartEntry>> {
+    val segments = mutableListOf<MutableList<TemperatureChartEntry>>()
+    entries.forEach { entry ->
+        val current = segments.lastOrNull()
+        if (current == null || current.last().offset + 1 != entry.offset) {
+            segments += mutableListOf(entry)
+        } else {
+            current += entry
+        }
+    }
+    return segments
+}
+
+/** Separate, shorter chart so the temperature scale is never visually compared with consumption bars. */
+@Composable
+private fun ProjectedTemperatureChart(projection: ChartProjection, locale: Locale) {
+    val producer = remember { CartesianChartModelProducer() }
+    LaunchedEffect(producer, projection) {
+        producer.runTransaction {
+            temperatureSegments(projection.temperatures).forEach { segment ->
+                lineSeries {
+                    series(x = segment.map { it.offset }, y = segment.map { it.celsius })
+                }
+            }
+        }
+    }
+    val color = MaterialTheme.colorScheme.tertiary
+    val line = LineCartesianLayer.rememberLine(
+        fill = LineCartesianLayer.LineFill.single(fill(color)),
+        pointProvider = LineCartesianLayer.PointProvider.single(
+            LineCartesianLayer.point(rememberShapeComponent(fill(color), CorneredShape.Pill), size = 6.dp),
+        ),
+    )
+    val context = LocalContext.current
+    val formatter = remember(locale, context) {
+        CartesianValueFormatter { _, value, _ ->
+            context.resources.getString(R.string.temperature_axis, numberText(BigDecimal.valueOf(value), locale))
+        }
+    }
+    val values = projection.temperatures.map { it.celsius.toDouble() }
+    val min = values.min()
+    val max = values.max()
+    val padding = if (min == max) 1.0 else (max - min) * 0.1
+    val range = remember(projection) {
+        CartesianLayerRangeProvider.fixed(
+            minX = 0.0,
+            maxX = (projection.positionCount - 1).toDouble(),
+            minY = min - padding,
+            maxY = max + padding,
+        )
+    }
+    val inspection = rememberInspection(
+        chartMarker(projection, locale, DefaultCartesianMarker.LabelPosition.Top, color) { offset ->
+            projection.temperatures.firstOrNull { it.offset == offset }
+                ?.let { context.resources.getString(R.string.temperature, numberText(it.celsius, locale)) }
+        },
+    )
+    CartesianChartHost(
+        chart = rememberCartesianChart(
+            rememberLineCartesianLayer(
+                lineProvider = LineCartesianLayer.LineProvider.series(line),
+                rangeProvider = range,
+            ),
+            startAxis = VerticalAxis.rememberStart(
+                valueFormatter = formatter,
+                itemPlacer = VerticalAxis.ItemPlacer.count(count = { 2 }),
+                size = Y_AXIS_SIZE,
+                title = stringResource(R.string.temperature_axis, "").trim(),
+                titleComponent = rememberAxisLabelComponent(),
+                tick = null,
+                line = null,
+            ),
+            marker = inspection.marker,
+            getXStep = { 1.0 },
+        ),
+        modelProducer = producer,
+        modifier = Modifier.height(110.dp).then(inspection.modifier),
+        scrollState = rememberVicoScrollState(scrollEnabled = false),
+        zoomState = rememberVicoZoomState(
+            zoomEnabled = false,
+            initialZoom = Zoom.Content,
+            minZoom = Zoom.Content,
+            maxZoom = Zoom.Content,
+        ),
+        animationSpec = null,
+        animateIn = false,
+    )
+}
+
+/** Same width for both charts' value axes so their plot areas line up. */
+private val Y_AXIS_SIZE = BaseAxis.Size.Fixed(56f)
 
 /** A horizontal baseline dash, not a fictitious positive-height consumption bar. */
 private class BaselineZeroComponent(fill: Fill, thicknessDp: Float) : LineComponent(fill, thicknessDp) {

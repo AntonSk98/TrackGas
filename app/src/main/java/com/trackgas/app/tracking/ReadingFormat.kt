@@ -28,13 +28,13 @@ internal fun bucketText(
 /**
  * Formats decimals without grouping so raw meter values can be reused in the editor.
  *
- * [raw] preserves entered fractional precision; calculated usage is rounded HALF_UP to
- * at most three decimal places for display only. The underlying value is never modified.
+ * [raw] preserves entered fractional precision; calculated usage and temperatures are rounded
+ * HALF_UP to one decimal place for display only. The underlying value is never modified.
  */
 internal fun numberText(value: BigDecimal, locale: Locale, raw: Boolean = false): String =
     NumberFormat.getNumberInstance(locale).apply {
         isGroupingUsed = false
-        maximumFractionDigits = if (raw) maxOf(0, value.scale()) else 3
+        maximumFractionDigits = if (raw) maxOf(0, value.scale()) else 1
         if (raw) minimumFractionDigits = maxOf(0, value.scale())
         roundingMode = RoundingMode.HALF_UP
     }.format(value)

@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.window.Dialog
 import com.trackgas.app.AppLanguages
 import com.trackgas.app.R
+import com.trackgas.app.temperature.MeterLocation
 import java.time.LocalDate
 import java.util.Locale
 
@@ -65,6 +66,11 @@ fun TrackerScreen(
     onReplaceMeter: () -> Unit = {},
     onOpenPurge: () -> Unit,
     onPurge: () -> Unit,
+    onOpenMeterLocation: () -> Unit = {},
+    onUpdateMeterLocationQuery: (String) -> Unit = {},
+    onSelectMeterLocation: (MeterLocation) -> Unit = {},
+    onSaveMeterLocation: () -> Unit = {},
+    onDismissMeterLocationDialog: () -> Unit = {},
     onExport: () -> Unit = {},
     onImport: () -> Unit = {},
     onConfirmCsvImport: () -> Unit = {},
@@ -151,6 +157,19 @@ fun TrackerScreen(
                             )
                             DropdownMenuItem(
                                 modifier = Modifier.padding(horizontal = 4.dp),
+                                text = { Text(stringResource(R.string.meter_location), style = MaterialTheme.typography.bodyLarge) },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_location),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                                onClick = { optionsExpanded = false; onOpenMeterLocation() },
+                            )
+                            DropdownMenuItem(
+                                modifier = Modifier.padding(horizontal = 4.dp),
                                 text = { Text(stringResource(R.string.language), style = MaterialTheme.typography.bodyLarge) },
                                 leadingIcon = {
                                     Icon(
@@ -213,7 +232,7 @@ fun TrackerScreen(
                 item(key = "local-notice") { LocalStorageNotice() }
                 item(key = "load-state") { ReadingLoadContent(state.loadState, onRetryLoad) }
             } else if (tab == TrackerTab.DASHBOARD) {
-                dashboardItems(state.period, state.dashboard, locale, onSelectPeriod, onNavigate)
+                dashboardItems(state.period, state.dashboard, state.temperatures, locale, onSelectPeriod, onNavigate)
             } else {
                 item(key = "local-notice") { LocalStorageNotice() }
                 historyItems(state.readings, locale, onEdit = onOpenEdit, onDelete = onOpenDelete, tracker = state.tracker)
@@ -294,4 +313,13 @@ fun TrackerScreen(
         onCancel = onCancelCsvImport,
         onAcknowledge = onAcknowledgeCsvImport,
     )
+    (state.locationDialog as? MeterLocationDialog.Editing)?.let { dialog ->
+        MeterLocationDialog(
+            state = dialog,
+            onQueryChange = onUpdateMeterLocationQuery,
+            onSelect = onSelectMeterLocation,
+            onSave = onSaveMeterLocation,
+            onDismiss = onDismissMeterLocationDialog,
+        )
+    }
 }
