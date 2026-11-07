@@ -18,7 +18,6 @@ sealed interface DeletePhase {
     data object Ready : DeletePhase
     data class Pending(val requestId: String) : DeletePhase
     data object Missing : DeletePhase
-    data object Protected : DeletePhase
     data class Failed(val failure: ReadingFailure) : DeletePhase
 }
 

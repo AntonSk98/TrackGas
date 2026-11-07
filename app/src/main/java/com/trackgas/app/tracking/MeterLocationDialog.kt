@@ -33,12 +33,9 @@ internal fun MeterLocationDialog(
         title = { Text(stringResource(R.string.meter_location_title)) },
         text = {
             Column {
-                Text(
-                    stringResource(
-                        if (state.requestedAfterAdd) R.string.meter_location_prompt else R.string.meter_location_description,
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                if (state.requestedAfterAdd) {
+                    Text(stringResource(R.string.meter_location_prompt), style = MaterialTheme.typography.bodyMedium)
+                }
                 OutlinedTextField(
                     value = state.query,
                     onValueChange = onQueryChange,

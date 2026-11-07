@@ -60,7 +60,7 @@ fun TrackerScreen(
     onOpenDelete: (Reading) -> Unit,
     onDismissDialog: () -> Unit,
     onClearDialogError: () -> Unit,
-    onSave: (LocalDate?, String, Locale) -> Unit,
+    onSave: (LocalDate?, String, Locale, String?) -> Unit,
     onDelete: () -> Unit,
     onOpenReplacement: () -> Unit = {},
     onReplaceMeter: () -> Unit = {},
@@ -229,12 +229,10 @@ fun TrackerScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (!ready) {
-                item(key = "local-notice") { LocalStorageNotice() }
                 item(key = "load-state") { ReadingLoadContent(state.loadState, onRetryLoad) }
             } else if (tab == TrackerTab.DASHBOARD) {
                 dashboardItems(state.period, state.dashboard, state.temperatures, locale, onSelectPeriod, onNavigate)
             } else {
-                item(key = "local-notice") { LocalStorageNotice() }
                 historyItems(state.readings, locale, onEdit = onOpenEdit, onDelete = onOpenDelete, tracker = state.tracker)
             }
         }
@@ -282,7 +280,7 @@ fun TrackerScreen(
                 loadState = state.loadState,
                 onRetryLoad = onRetryLoad,
                 onClearError = onClearDialogError,
-                onSave = { date, value -> onSave(date, value, locale) },
+                onSave = { date, value, note -> onSave(date, value, locale, note) },
                 onDismiss = onDismissDialog,
                 tracker = state.tracker,
             )
@@ -297,7 +295,6 @@ fun TrackerScreen(
                 loadState = state.loadState,
                 onRetryLoad = onRetryLoad,
                 onConfirm = onReplaceMeter,
-                onAddFinal = onOpenAdd,
                 onDismiss = onDismissDialog,
             )
         }

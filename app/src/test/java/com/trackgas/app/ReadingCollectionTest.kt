@@ -34,7 +34,7 @@ class ReadingCollectionTest {
         assertThrows(IllegalArgumentException::class.java) { readingIntervals(readings) }
     }
 
-    @Test fun rejectsDuplicateDatesAndDecreasingCumulativeValues() {
+    @Test fun rejectsDuplicateDatesAndDecreasingCumulativeValuesWithinOneInstallation() {
         val duplicateDates = listOf(last, middle.copy(date = first.date), first)
         assertEquals(ReadingCollectionViolation.DUPLICATE_DATE, readingCollectionViolation(duplicateDates))
         assertThrows(IllegalArgumentException::class.java) { readingIntervals(duplicateDates) }
@@ -47,85 +47,51 @@ class ReadingCollectionTest {
         }
     }
 
-    private fun replaced(): TrackerData {
-        val baseline = Reading("initial", last.date, "0.0000".toBigDecimal(), "new")
-        return TrackerData(
-            listOf(last, first, baseline),
-            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", last.date)),
-            listOf(MeterReplacement("boundary", last.date, ORIGINAL_INSTALLATION_ID, "new", last.id, baseline.id)),
-        )
-    }
-
-    @Test fun validReplacementAllowsLowerValueAndSameDateOnlyAcrossInstallations() {
-        val tracker = replaced()
-        assertNull(readingCollectionViolation(tracker))
-        assertNull(readingCollectionViolation(tracker.copy(readings = tracker.readings +
-            Reading("later", last.date.plusDays(2), "3".toBigDecimal(), "new"))))
-        assertEquals(ReadingCollectionViolation.DUPLICATE_DATE, readingCollectionViolation(
-            tracker.copy(readings = tracker.readings + last.copy(id = "duplicate")),
-        ))
-    }
-
-    @Test fun invalidReferencesEndpointsChainsAndLifetimesAreRejected() {
-        val tracker = replaced()
-        val boundary = tracker.replacements.single()
-        val cases = listOf(
-            tracker.copy(installations = emptyList()),
-            tracker.copy(replacements = listOf(boundary.copy(newInstallationId = ORIGINAL_INSTALLATION_ID))),
-            tracker.copy(replacements = listOf(boundary.copy(oldInstallationId = "missing"))),
-            tracker.copy(replacements = listOf(boundary.copy(finalReadingId = "missing"))),
-            tracker.copy(replacements = listOf(boundary.copy(initialReadingId = first.id))),
-            tracker.copy(replacements = listOf(boundary.copy(date = last.date.plusDays(1)))),
-            tracker.copy(readings = tracker.readings + last.copy(id = "past-end", date = last.date.plusDays(1))),
-            tracker.copy(readings = tracker.readings + Reading("before-start", first.date, "0".toBigDecimal(), "new")),
-            tracker.copy(readings = tracker.readings + first.copy(id = "orphan", installationId = "missing")),
-            tracker.copy(readings = tracker.readings + Reading("decrease", last.date.plusDays(1), "0".toBigDecimal(), "new"),
-                replacements = tracker.replacements,
-            ).let { data -> data.copy(readings = data.readings.map { if (it.id == "initial") it.copy(cubicMetres = "1".toBigDecimal()) else it }) },
-        )
-        cases.forEach { assertNotNull(readingCollectionViolation(it)) }
-    }
-
-    @Test fun independentRootsAreValidAndCurrentInstallationUsesLatestStartDate() {
-        val tracker = replaced().copy(replacements = emptyList())
-        assertNull(readingCollectionViolation(tracker))
-        assertEquals("new", tracker.currentInstallation.id)
-        assertEquals(1, readingIntervals(tracker).size)
-    }
-
-    @Test fun latestReadingDateWinsAndCurrentMarkerBreaksTies() {
-        val date = last.date
-        val old = MeterInstallation("old")
-        val laterStarted = MeterInstallation("later-started", date.minusDays(2))
+    @Test fun independentInstallationsAllowLowerValuesAndNeverCreateCrossMeterIntervals() {
+        val oldLast = last
+        val newFirst = Reading("new-first", oldLast.date.plusDays(1), "0.0000".toBigDecimal(), "new")
+        val newLast = Reading("new-last", oldLast.date.plusDays(2), "3".toBigDecimal(), "new")
         val tracker = TrackerData(
-            readings = listOf(
-                Reading("old-latest", date, "10".toBigDecimal(), old.id),
-                Reading("later-earlier", date.minusDays(1), "5".toBigDecimal(), laterStarted.id),
-            ),
-            installations = listOf(old, laterStarted),
+            listOf(newLast, oldLast, newFirst, first),
+            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", newFirst.date)),
         )
-        assertEquals("old", tracker.currentInstallation.id)
-        val tied = tracker.copy(readings = tracker.readings + Reading("later-tie", date, "6".toBigDecimal(), laterStarted.id))
-        assertEquals(laterStarted.id, tied.currentInstallation.id)
+        assertNull(readingCollectionViolation(tracker))
+        val intervals = readingIntervals(tracker)
+        assertEquals(2, intervals.size)
+        assertTrue(intervals.all { it.earlier.installationId == it.later.installationId })
+        assertEquals(listOf(oldLast.id, newLast.id), intervals.map { it.later.id })
+        assertEquals("new", tracker.currentInstallation.id)
     }
 
-    @Test fun replacementComponentsRemainStrictlyOrderedAlongsideIndependentRoots() {
-        val tracker = replaced()
-        val final = Reading("second-final", last.date.plusDays(1), "2".toBigDecimal(), "new")
-        val initial = Reading("second-initial", final.date, "10".toBigDecimal(), "third")
-        val second = MeterReplacement("second", final.date, "new", "third", final.id, initial.id)
-        val chain = tracker.copy(
-            readings = tracker.readings + final + initial,
-            installations = tracker.installations + MeterInstallation("third", final.date),
-            replacements = tracker.replacements + second,
+    @Test fun rejectsMissingInstallationsAndOverlappingMeterCoverage() {
+        val readings = listOf(first, last)
+        val tracker = TrackerData(
+            readings = readings,
+            installations = listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID)),
         )
-        assertNull(readingCollectionViolation(chain))
-        assertEquals("third", chain.currentInstallation.id)
-        val independent = chain.copy(
-            installations = chain.installations + MeterInstallation("independent", last.date.plusDays(2)),
+        assertNull(readingCollectionViolation(tracker))
+        val unknownMeter = tracker.copy(readings = readings + first.copy(id = "orphan", installationId = "missing"))
+        assertEquals(ReadingCollectionViolation.INVALID_INSTALLATION, readingCollectionViolation(unknownMeter))
+
+        val overlapping = TrackerData(
+            readings = readings + listOf(
+                Reading("other-first", first.date, "5".toBigDecimal(), "other"),
+                Reading("other-last", last.date, "8".toBigDecimal(), "other"),
+            ),
+            installations = listOf(
+                MeterInstallation(ORIGINAL_INSTALLATION_ID),
+                MeterInstallation("other", first.date),
+            ),
         )
-        assertNull(readingCollectionViolation(independent))
-        assertNotNull(readingCollectionViolation(chain.copy(replacements = chain.replacements + second.copy(id = "fork"))))
-        assertNotNull(readingCollectionViolation(chain.copy(replacements = listOf(chain.replacements[0], second.copy(date = last.date)))))
+        assertEquals(ReadingCollectionViolation.OVERLAPPING_COVERAGE, readingCollectionViolation(overlapping))
+        assertThrows(IllegalArgumentException::class.java) { readingIntervals(overlapping) }
+    }
+
+    @Test fun newEmptyInstallationBecomesCurrentWithoutAReadingButLaterDatedDataWins() {
+        val newMeter = MeterInstallation("new", last.date.plusDays(1))
+        val tracker = TrackerData(listOf(first, last), listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), newMeter))
+        assertEquals(newMeter, tracker.currentInstallation)
+        val futureReading = last.copy(id = "future", date = newMeter.startDate!!.plusDays(1))
+        assertEquals(ORIGINAL_INSTALLATION_ID, tracker.copy(readings = tracker.readings + futureReading).currentInstallation.id)
     }
 }

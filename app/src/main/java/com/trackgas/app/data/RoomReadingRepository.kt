@@ -79,16 +79,12 @@ class RoomReadingRepository internal constructor(
         ordering.withLock {
             val result = database.withTransaction {
                 val tracker = readRows()
-                when (val validation = evaluateReplacement(tracker, intent, newIdentity(), newIdentity(), newIdentity())) {
+                when (val validation = evaluateReplacement(tracker, intent, newIdentity())) {
                     is ReplacementValidation.Rejected -> ReplaceRows.Rejected(validation.error)
                     is ReplacementValidation.Accepted -> {
                         val next = validation.tracker
                         val installation = next.installations.last()
-                        val replacement = next.replacements.last()
                         dao.insertInstallation(InstallationEntity(installation.id, installation.startDate?.toString()))
-                        dao.insert(next.readings.last().toEntity())
-                        dao.insertReplacement(ReplacementEntity(replacement.id, replacement.date.toString(),
-                            replacement.oldInstallationId, replacement.newInstallationId, replacement.finalReadingId, replacement.initialReadingId))
                         ReplaceRows.Accepted(readRows())
                     }
                 }
@@ -156,8 +152,6 @@ class RoomReadingRepository internal constructor(
                         is CsvImportCandidateValidation.Valid -> {
                             val affected = preview.rows.map { it.installationId }.toSet()
                             if (affected.isNotEmpty()) {
-                                // Remove links first, then rebuild only the imported meter records.
-                                dao.deleteReplacementsForInstallations(affected.toList())
                                 dao.deleteForInstallations(affected.toList())
                                 dao.deleteInstallationsById(affected.toList())
                                 candidate.tracker.installations.filter { it.id in affected }.forEach { installation ->
@@ -190,7 +184,6 @@ class RoomReadingRepository internal constructor(
             val result = database.withTransaction {
                 when (evaluateDeletion(readRows(), id)) {
                     DeletionValidation.MISSING -> DeleteRows.Missing
-                    DeletionValidation.PROTECTED -> DeleteRows.Protected
                     DeletionValidation.ALLOWED -> {
                         check(dao.delete(id) == 1) { "Reading disappeared during delete" }
                         database.temperatures().pruneOutsideReadingRange()
@@ -200,7 +193,6 @@ class RoomReadingRepository internal constructor(
             }
             when (result) {
                 DeleteRows.Missing -> DeleteReadingResult.Missing
-                DeleteRows.Protected -> DeleteReadingResult.Protected
                 is DeleteRows.Accepted -> {
                     mutationRevision++
                     DeleteReadingResult.Deleted(snapshot(result.tracker))
@@ -213,8 +205,7 @@ class RoomReadingRepository internal constructor(
         ordering.withLock {
             val tracker = database.withTransaction {
                 val before = readRows()
-                // Remove dependent rows first and restore the required original installation.
-                dao.deleteReplacements()
+                // Restore one empty current installation after removing the full tracker.
                 dao.deleteReadings()
                 database.temperatures().deleteAll()
                 dao.deleteInstallations()
@@ -230,7 +221,7 @@ class RoomReadingRepository internal constructor(
 
     private suspend fun readRows(): TrackerData {
         val tracker = TrackerData(dao.getAll().map { it.toReading() },
-            dao.getInstallations().map { it.toInstallation() }, dao.getReplacements().map { it.toReplacement() })
+            dao.getInstallations().map { it.toInstallation() })
         readingCollectionViolation(tracker)?.let {
             throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored reading collection: $it"))
         }
@@ -251,7 +242,6 @@ class RoomReadingRepository internal constructor(
 
     private sealed interface DeleteRows {
         data object Missing : DeleteRows
-        data object Protected : DeleteRows
         data class Accepted(val tracker: TrackerData) : DeleteRows
     }
 

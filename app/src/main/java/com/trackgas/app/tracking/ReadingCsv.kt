@@ -11,13 +11,15 @@ fun readingCsv(tracker: TrackerData): ByteArray {
         },
     )
     return buildString {
-        append("meter_id;date;meter_value\n")
+        append("meter_id;date;meter_value;note\n")
         rows.forEach { reading ->
             append(csvField(reading.installationId))
             append(';')
             append(csvField(reading.date.toString()))
             append(';')
             append(csvField(reading.cubicMetres.toPlainString()))
+            append(';')
+            append(csvField(reading.note.orEmpty()))
             append('\n')
         }
     }.toByteArray(Charsets.UTF_8)

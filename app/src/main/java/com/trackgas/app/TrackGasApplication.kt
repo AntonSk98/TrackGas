@@ -39,7 +39,6 @@ class TrackGasApplication : Application() {
 
     private val database by lazy {
         Room.databaseBuilder(this, ReadingDatabase::class.java, "readings.db")
-            .addMigrations(ReadingDatabase.MIGRATION_1_2, ReadingDatabase.MIGRATION_2_3)
             .addCallback(ReadingDatabase.INITIALIZE)
             .build()
     }

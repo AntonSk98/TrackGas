@@ -23,14 +23,13 @@ class ReadingTest {
         assertEquals(BigDecimal.ZERO, reading.cubicMetres)
     }
 
-    @Test fun fullSnapshotRetainsInstallationBoundariesAndExactScale() {
+    @Test fun fullSnapshotRetainsIndependentInstallationsAndExactScale() {
         val date = LocalDate.of(2026, 10, 28)
         val old = Reading("final", date, BigDecimal("1105.0000"))
         val initial = Reading("initial", date, BigDecimal("12.5000"), "new")
         val tracker = TrackerData(
             listOf(old, initial),
             listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", date)),
-            listOf(MeterReplacement("replacement", date, old.installationId, "new", old.id, initial.id)),
         )
         val snapshot = CommittedSnapshot(1, tracker)
         assertSame(tracker, snapshot.tracker)

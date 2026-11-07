@@ -129,7 +129,6 @@ class TrackerViewModel(
         state = state.copy(export = ExportState.Selecting(requestId, tracker.copy(
             readings = tracker.readings.toList(),
             installations = tracker.installations.toList(),
-            replacements = tracker.replacements.toList(),
         )))
         return requestId
     }
@@ -313,9 +312,7 @@ class TrackerViewModel(
 
     fun openEdit(reading: Reading) = open(ReadingDialog.Editing(newId(), ReadingTarget.Edit(reading)))
 
-    fun openDelete(reading: Reading) = open(ReadingDialog.ConfirmingDeletion(
-        newId(), reading, if (state.tracker.isBoundaryReading(reading.id)) DeletePhase.Protected else DeletePhase.Ready,
-    ))
+    fun openDelete(reading: Reading) = open(ReadingDialog.ConfirmingDeletion(newId(), reading))
 
     fun openPurge() = open(ReadingDialog.ConfirmingPurge(newId()))
 
@@ -452,14 +449,14 @@ class TrackerViewModel(
         }
     }
 
-    fun save(date: LocalDate?, input: String, locale: Locale) {
+    fun save(date: LocalDate?, input: String, locale: Locale, note: String? = null) {
         val dialog = state.dialog as? ReadingDialog.Editing ?: return
         if (state.loadState != ReadingLoadState.READY || dialog.pending) return
         val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
         val meter = parseMeter(input, locale)
         val intent = when (val target = dialog.target) {
             is ReadingTarget.Add -> SaveReadingIntent.Add(date, meter, today())
-            is ReadingTarget.Edit -> SaveReadingIntent.Edit(target.reading.id, meter, today())
+            is ReadingTarget.Edit -> SaveReadingIntent.Edit(target.reading.id, meter, today(), note)
         }
         state = state.copy(dialog = dialog.copy(phase = SavePhase.Pending(request.requestId)))
         viewModelScope.launch {
@@ -482,14 +479,13 @@ class TrackerViewModel(
 
     fun delete() {
         val dialog = state.dialog as? ReadingDialog.ConfirmingDeletion ?: return
-        if (state.loadState != ReadingLoadState.READY || dialog.pending || dialog.phase == DeletePhase.Protected) return
+        if (state.loadState != ReadingLoadState.READY || dialog.pending) return
         val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
         state = state.copy(dialog = dialog.copy(phase = DeletePhase.Pending(request.requestId)))
         viewModelScope.launch {
             try {
                 when (val result = repository.delete(dialog.reading.id)) {
                     DeleteReadingResult.Missing -> finishDelete(request, DeletePhase.Missing)
-                    DeleteReadingResult.Protected -> finishDelete(request, DeletePhase.Protected)
                     is DeleteReadingResult.Deleted -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishDelete(request, null)
@@ -565,10 +561,8 @@ class TrackerViewModel(
         // All three collections matter; reading equality includes exact decimal scale.
         if (snapshot.tracker.readings.size == state.tracker.readings.size &&
             snapshot.tracker.installations.size == state.tracker.installations.size &&
-            snapshot.tracker.replacements.size == state.tracker.replacements.size &&
             snapshot.readings.associateBy { it.id } == state.tracker.readings.associateBy { it.id } &&
-            snapshot.tracker.installations.associateBy { it.id } == state.tracker.installations.associateBy { it.id } &&
-            snapshot.tracker.replacements.associateBy { it.id } == state.tracker.replacements.associateBy { it.id }
+            snapshot.tracker.installations.associateBy { it.id } == state.tracker.installations.associateBy { it.id }
         ) return
         project(snapshot.tracker, state.period)
     }

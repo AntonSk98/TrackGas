@@ -101,7 +101,6 @@ class DashboardTest {
             listOf(first, final, initial) +
                 listOfNotNull(next?.let { Reading("new-next", boundary.plusDays(gap), BigDecimal(it), "new") }),
             listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", boundary)),
-            listOf(MeterReplacement("replacement", boundary, ORIGINAL_INSTALLATION_ID, "new", final.id, initial.id)),
         )
     }
 
@@ -115,7 +114,7 @@ class DashboardTest {
             val tracker = replacementTracker(boundaryText)
             val old = dashboard(tracker, CalendarPeriod.containing(type, boundary))
             val new = dashboard(tracker, CalendarPeriod.containing(type, boundary.plusDays(1)))
-            assertEquals(BigDecimal("5"), old.total.cubicMetres)
+            assertEquals(BigDecimal("15"), old.total.cubicMetres)
             assertEquals(BigDecimal("6"), new.total.cubicMetres)
             assertEquals(1L, old.total.coveredDays)
             assertEquals(3L, new.total.coveredDays)
@@ -134,6 +133,45 @@ class DashboardTest {
         }
     }
 
+    @Test fun replacementDayAddsTheNewMeterReadingToTheOldMetersDailyConsumption() {
+        val replacementDay = LocalDate.parse("2026-11-07")
+        val tracker = TrackerData(
+            readings = listOf(
+                Reading("old-previous", replacementDay.minusDays(1), BigDecimal("45")),
+                Reading("old-final", replacementDay, BigDecimal("50")),
+                Reading("new-first", replacementDay, BigDecimal("25"), "new"),
+            ),
+            installations = listOf(
+                MeterInstallation(ORIGINAL_INSTALLATION_ID),
+                MeterInstallation("new", replacementDay),
+            ),
+        )
+
+        val result = dashboard(tracker, CalendarPeriod.containing(PeriodType.WEEK, replacementDay))
+
+        assertEquals(BigDecimal("30"), result.total.cubicMetres)
+        assertEquals(1L, result.total.coveredDays)
+        assertEquals(1, result.buckets.size)
+        assertEquals(replacementDay, result.buckets.single().range.start)
+        assertEquals(BigDecimal("30"), result.buckets.single().amount.cubicMetres)
+    }
+
+    @Test fun firstReadingAfterReplacementDateRemainsAnUncoveredBaseline() {
+        val startDate = LocalDate.parse("2026-11-07")
+        val tracker = TrackerData(
+            readings = listOf(Reading("new-first", startDate.plusDays(1), BigDecimal("25"), "new")),
+            installations = listOf(
+                MeterInstallation(ORIGINAL_INSTALLATION_ID),
+                MeterInstallation("new", startDate),
+            ),
+        )
+
+        val result = dashboard(tracker, CalendarPeriod.containing(PeriodType.WEEK, startDate))
+
+        assertNull(result.total.cubicMetres)
+        assertTrue(result.buckets.isEmpty())
+    }
+
     @Test fun replacementWithSkippedDaysRetainsExactWholeIntervalsInsteadOfSummingRoundedBuckets() {
         val base = replacementTracker("2026-10-04", "10.0000", "11.0000")
         val tracker = base.copy(readings = base.readings.map {
@@ -144,23 +182,23 @@ class DashboardTest {
             }
         })
         val month = dashboard(tracker, period(PeriodType.MONTH, "2026-10-01"))
-        assertEquals(BigDecimal("2.0000"), month.total.cubicMetres)
+        assertEquals(BigDecimal("12.0000"), month.total.cubicMetres)
         assertEquals(6L, month.total.coveredDays)
         assertEquals((2..7).toList(), month.buckets.map { it.range.start.dayOfMonth })
         assertTrue(month.buckets.all { it.amount.estimatedDistribution })
-        assertEquals(BigDecimal("0.3333333333333333333333333333333333"), month.buckets.first().amount.cubicMetres)
+        assertEquals(BigDecimal("10.3333333333333333333333333333333333"), month.buckets[2].amount.cubicMetres)
         assertNotEquals(month.total.cubicMetres, month.buckets.fold(BigDecimal.ZERO) { sum, bucket -> sum + bucket.amount.cubicMetres!! })
         val year = dashboard(tracker, period(PeriodType.YEAR, "2026-01-01"))
         assertEquals(month.total.cubicMetres, year.total.cubicMetres)
         assertEquals(month.total.cubicMetres, year.buckets.single().amount.cubicMetres)
     }
 
-    @Test fun replacementBaselineIsUnknownUntilLaterReadingEstablishesEvenZeroCoverage() {
+    @Test fun replacementStartDayIncludesItsFirstReadingAndLaterEqualReadingIsKnownZero() {
         val source = replacementTracker("2026-10-28", "12.5000", null)
         val selected = period(PeriodType.WEEK, "2026-10-26")
         val before = dashboard(source, selected)
         assertEquals(listOf(28), before.buckets.map { it.range.start.dayOfMonth })
-        assertEquals(BigDecimal("5"), before.total.cubicMetres)
+        assertEquals(BigDecimal("17.5000"), before.total.cubicMetres)
         val initial = source.readings.single { it.id == "new-initial" }
         val after = dashboard(source.copy(readings = source.readings + initial.copy(
             id = "zero-next", date = initial.date.plusDays(1),
@@ -185,16 +223,19 @@ class DashboardTest {
             }
         }
         assertEquals(listOf(BigDecimal("5"), BigDecimal("3")), before.buckets.map { it.amount.cubicMetres })
-        assertEquals(listOf(BigDecimal("6"), BigDecimal("2")), project(corrected).buckets.map { it.amount.cubicMetres })
+        assertEquals(listOf(BigDecimal("7"), BigDecimal("2")), project(corrected).buckets.map { it.amount.cubicMetres })
         val deletedNext = project(corrected.filterNot { it.id == "new-next" })
-        assertEquals(BigDecimal("6"), deletedNext.total.cubicMetres)
+        assertEquals(BigDecimal("7"), deletedNext.total.cubicMetres)
         assertEquals(listOf(28), deletedNext.buckets.map { it.range.start.dayOfMonth })
         assertEquals(BigDecimal("3"), project(source.readings.filterNot { it.id == "old-first" }).total.cubicMetres)
-        for (endpoint in listOf("old-final", "new-initial")) {
-            assertThrows(IllegalArgumentException::class.java) {
-                project(source.readings.filterNot { it.id == endpoint })
-            }
-        }
+        assertEquals(
+            BigDecimal("3"),
+            project(source.readings.filterNot { it.id == "old-final" }).total.cubicMetres,
+        )
+        assertEquals(
+            BigDecimal("5"),
+            project(source.readings.filterNot { it.id == "new-initial" }).total.cubicMetres,
+        )
         assertThrows(IllegalArgumentException::class.java) {
             project(source.readings.map { if (it.id == "new-initial") it.copy(cubicMetres = BigDecimal("4")) else it })
         }

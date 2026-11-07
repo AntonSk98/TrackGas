@@ -36,11 +36,11 @@ Dashboard SHALL omit reading history and individual Unknown consumption rows. Th
 - **THEN** no unfinished feature actions are offered
 
 ### Requirement: Cohesive light visual hierarchy
-The interface SHALL use warm off-white backgrounds, white cards, teal accents, and consistent typography, spacing, and controls across Dashboard, History, Add/Edit, and delete confirmation. Dashboard SHALL emphasize the selected period and consumption total. History SHALL emphasize reading dates and values with identifiable Edit/Delete actions. Local-storage disclosure SHALL remain readable on both pages without dominating the content.
+The interface SHALL use warm off-white backgrounds, white cards, teal accents, and consistent typography, spacing, and controls across Dashboard, History, Add/Edit, and delete confirmation. Dashboard SHALL emphasize the selected period and consumption total. History SHALL emphasize reading dates and values with identifiable Edit/Delete actions. Consumption and temperature metrics SHALL each place a title above a separate value row; their title typography SHALL match, and the temperature value SHALL use the line chart's color. Spacing between metric values and charts SHALL remain compact. The local-storage disclosure SHALL NOT appear on Dashboard or History.
 
 #### Scenario: Browse a populated dashboard
 - **WHEN** the user views a period with consumption
-- **THEN** Weekly/Monthly/Yearly selection, a prominent Consumption total, a chart, date-range navigation, and supporting values appear in that order beneath the shared toolbar and tabs, with local-storage disclosure visible in the page and date-range navigation directly beneath the chart inside its card
+- **THEN** Weekly/Monthly/Yearly selection, a prominent Consumption total, charts with matching title styling, date-range navigation, and supporting values appear in that order beneath the shared toolbar and tabs, with date-range navigation directly beneath the charts inside its card
 
 #### Scenario: Manage a reading with consistent styling
 - **WHEN** the user opens History, edits a reading, or requests deletion
@@ -48,7 +48,7 @@ The interface SHALL use warm off-white backgrounds, white cards, teal accents, a
 
 #### Scenario: Understand temporary storage
 - **WHEN** the user opens either Dashboard or History
-- **THEN** the page includes readable text explaining that readings are stored on the device and are not backed up to the cloud
+- **THEN** no local-storage disclosure is shown, and the app continues storing readings locally without an on-screen notice
 
 ### Requirement: Responsive readable controls
 The interface SHALL keep tab, period, reading-management, and dialog actions reachable on compact screens, in landscape, with enlarged system fonts, and with the keyboard open. Interactive controls SHALL provide at least 48 dp touch targets and meaningful labels. Text SHALL meet 4.5:1 contrast for normal text and 3:1 for large text against its surface. Color SHALL NOT be the only indication of selection or error.
@@ -74,15 +74,19 @@ The interface SHALL keep tab, period, reading-management, and dialog actions rea
 - **THEN** its date and value are readable and localized, reading-specific click-to-edit and long-click-to-delete action labels are available
 
 ### Requirement: Meter-only History editing
-The History editor SHALL allow changes only to the meter value. It SHALL show the original localized date in a read-only field labelled "Date", without "Reading date", "Choose date", or a date picker. Save SHALL retain the reading's original date and identity. Add SHALL retain its existing date-selection behavior.
+The History editor SHALL allow changes to the meter value and an optional note. It SHALL show the original localized date in a read-only field labelled "Date", without "Reading date", "Choose date", or a date picker. Save SHALL retain the reading's original date and identity. Add SHALL retain its existing date-selection behavior and SHALL NOT offer a note field.
 
 #### Scenario: Consistent Add and Edit date presentation
 - **WHEN** the user opens Add or Edit
 - **THEN** both forms show the same outlined Date field and meter field, without a separate Reading date label or Choose date text button; tapping the Add date opens its picker with a meaningful accessible button label, while the Edit date remains immutable
 
 #### Scenario: Edit a meter value
-- **WHEN** the user taps a History entry, changes its valid meter value, and saves
-- **THEN** the value updates while its date, identity, History selection, and dashboard period remain unchanged
+- **WHEN** the user taps a History entry, changes its valid meter value or note, and saves
+- **THEN** the value or note updates while its date, identity, History selection, and dashboard period remain unchanged
+
+#### Scenario: Add retains its current form
+- **WHEN** the user opens Add
+- **THEN** the existing date and meter fields remain unchanged and no note field is shown
 
 #### Scenario: Inspect the read-only date
 - **WHEN** the user taps the Date field in the History editor
@@ -91,6 +95,21 @@ The History editor SHALL allow changes only to the meter value. It SHALL show th
 #### Scenario: Request deletion
 - **WHEN** the user long-presses a History entry
 - **THEN** the delete prompt identifies that reading, Cancel leaves it unchanged, and Delete removes it only after confirmation
+
+### Requirement: Compact independent meter entries
+History SHALL present a reading's date and value in two rows, with an optional third row for its note. When multiple meter histories exist, the meter identifier SHALL be compactly displayed with the value rather than in a separate repeated role row.
+
+#### Scenario: Read a history entry without a note
+- **WHEN** the user views a reading without a note
+- **THEN** its date and value fit in two rows and no separate meter-role row is shown
+
+#### Scenario: Read a history entry with a note
+- **WHEN** the user views a reading with a note
+- **THEN** its date, value, and note appear in three rows
+
+#### Scenario: Identify an independent meter
+- **WHEN** History includes readings from multiple meter installations
+- **THEN** each value remains associated with a compact meter identifier
 
 ### Requirement: Dismiss reading drafts outside the form
 While no reading mutation is pending, the Add/Edit dialog SHALL dismiss and discard its unsaved draft when the user taps outside its visible form surface. Interactions within the form SHALL NOT dismiss it. Back and Cancel SHALL remain available except while a mutation is pending; dismissing the nested date picker SHALL return to the unsaved form rather than save or discard it.
@@ -131,7 +150,7 @@ The shared toolbar SHALL show a gear-shaped options icon immediately to the left
 
 #### Scenario: Open options from either tab
 - **WHEN** the user taps the gear icon on Dashboard or History
-- **THEN** the menu opens beside the toolbar action, offers Replace meter, Purge data, and Language among its implemented options, and leaves Add in its existing rightmost position
+- **THEN** the menu offers Export CSV, Import CSV, Replace meter, Purge data, and Language, and leaves Add in its existing rightmost position
 
 #### Scenario: Dismiss without changes
 - **WHEN** the user dismisses the menu with Back or an outside tap
@@ -172,46 +191,31 @@ Pending purge SHALL show progress, disable confirmation and cancellation, and bl
 - **THEN** the options action cannot start a purge, an existing purge confirmation cannot submit, and load retry does not delete data
 
 ### Requirement: Explicit meter replacement form
-Selecting Replace meter SHALL close the menu and open a modal showing today's read-only date and the saved final old-meter value, without asking for a new-meter value. The form SHALL explain that confirmation automatically starts the new installation at zero on that date and require an explicit "Confirm replacement" action. If today's old-meter reading is missing, it SHALL instead explain that the final reading must first be saved through Add.
+Selecting Replace meter SHALL close the menu and open a modal showing today's read-only date. It SHALL explain that confirmation starts an independent, empty meter history on that date and require an explicit confirmation action. It SHALL NOT require a final old-meter reading or create a synthetic initial reading.
 
 #### Scenario: Confirm an automatic zero baseline
-- **WHEN** today's old-meter final reading exists and the user selects Replace meter
-- **THEN** the form identifies that saved reading, explains the automatic zero baseline, offers no new-meter input, and provides Confirm replacement and Cancel
+- **WHEN** the user selects Replace meter and confirms
+- **THEN** a new empty meter history starts today, existing readings remain in their prior histories, and no synthetic baseline or linked reading is created
 
 #### Scenario: Missing final reading
-- **WHEN** no final reading exists for the current meter today
-- **THEN** the dialog explains the prerequisite and provides a route to ordinary Add without creating a meter or fabricating a final reading
+- **WHEN** the current meter history has no reading and the user confirms
+- **THEN** the replacement succeeds without a final reading, fabricating a reading, or displaying a missing-final warning
 
 #### Scenario: Cancel replacement
 - **WHEN** the user cancels, presses Back, or taps outside a non-pending replacement form
-- **THEN** the replacement confirmation closes without creating a baseline and the already saved old-meter reading remains unchanged
+- **THEN** the replacement confirmation closes without creating an installation and existing readings remain unchanged
 
 #### Scenario: Storage errors
 - **WHEN** confirmation cannot commit
-- **THEN** the replacement confirmation remains open with the existing generic storage-error treatment and permits retry without requesting a meter value
+- **THEN** the replacement confirmation remains open with the existing generic storage-error treatment and permits retry
 
 #### Scenario: Pending and restored replacement
 - **WHEN** replacement is pending and the user rotates, attempts dismissal, or presses confirmation again
 - **THEN** the matching disabled confirmation remains visible, dismissal and duplicate submission are blocked, and only its matching committed result closes it
 
 #### Scenario: Shared visual and layout treatment
-- **WHEN** the replacement dialog is opened in landscape with a keyboard or at 200% font size
-- **THEN** its read-only date, explanation, error feedback, and actions remain reachable using the existing light theme, localized formatting, scrolling, and system-inset behavior
-
-### Requirement: Identifiable meter boundaries in History
-History SHALL distinguish installations and label replacement-day final and initial readings without relying on color. Same-date endpoints SHALL be ordered deterministically with the new-meter initial reading before the old-meter final reading in newest-first History. Boundary readings SHALL support value editing, but not ordinary deletion; attempting deletion SHALL explain why rather than offer a destructive confirmation.
-
-#### Scenario: Inspect replacement day
-- **WHEN** History includes a replacement on October 28
-- **THEN** both October 28 endpoints remain visible with distinct meter and final/initial labels, with the automatically established new-meter baseline first
-
-#### Scenario: Correct a boundary value
-- **WHEN** the user taps a replacement endpoint
-- **THEN** the existing meter-value editor opens with its original read-only date, and saving preserves its installation and boundary role
-
-#### Scenario: Request deletion of a boundary
-- **WHEN** the user long-presses a structural final or initial reading
-- **THEN** the app explains that the reading defines a meter replacement and cannot be deleted individually, without deleting or joining installations
+- **WHEN** the replacement dialog is opened in landscape or at 200% font size
+- **THEN** its date, explanation, error feedback, and actions remain reachable using the existing light theme, localized formatting, scrolling, and system-inset behavior
 
 ### Requirement: Application branding icon
 The app SHALL use a recognizable gas-tracking brand mark as its Android launcher icon and display that mark beside "TrackGas" in the shared in-app toolbar.

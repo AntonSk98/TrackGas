@@ -50,7 +50,7 @@ internal fun ReadingForm(
     loadState: ReadingLoadState,
     onRetryLoad: () -> Unit,
     onClearError: () -> Unit,
-    onSave: (LocalDate?, String) -> Unit,
+    onSave: (LocalDate?, String, String?) -> Unit,
     onDismiss: () -> Unit,
     tracker: TrackerData = TrackerData(readings),
 ) {
@@ -61,7 +61,7 @@ internal fun ReadingForm(
     }
     fun newDraft() = ReadingDraft(sessionId, dialog.dialogId, initialDate.toString(), reading?.let {
         numberText(it.cubicMetres, locale, raw = true)
-    } ?: "")
+    } ?: "", reading?.note.orEmpty())
     var restoredDraft by rememberSaveable(stateSaver = ReadingDraft.saver) { mutableStateOf(newDraft()) }
     // rememberSaveable inputs alone do not validate identities restored from a saved registry.
     if (!restoredDraft.matches(sessionId, dialog.dialogId)) restoredDraft = newDraft()
@@ -78,16 +78,18 @@ internal fun ReadingForm(
         editing = reading != null,
         displayedDate = dateText(reading?.date ?: date, locale),
         value = draft.value,
+        note = draft.note,
         errors = errors.copy(date = errors.date.takeUnless { duplicate }),
         pending = pending,
         failed = dialog.phase is SavePhase.Failed,
         loadState = loadState,
         onValueChange = { draft.value = it; onClearError() },
+        onNoteChange = { draft.note = it; onClearError() },
         onChooseDate = { draft.choosingDate = true },
         onRetryLoad = onRetryLoad,
         onSave = {
             draft.duplicateDismissed = false
-            onSave(reading?.date ?: date, draft.value)
+            onSave(reading?.date ?: date, draft.value, reading?.let { draft.note.takeUnless(String::isBlank) })
         },
         onDismiss = onDismiss,
     )

@@ -31,5 +31,10 @@ sealed interface SaveReadingIntent {
     val meter: ParsedMeter
     val today: LocalDate
     data class Add(val date: LocalDate?, override val meter: ParsedMeter, override val today: LocalDate) : SaveReadingIntent
-    data class Edit(val id: String, override val meter: ParsedMeter, override val today: LocalDate) : SaveReadingIntent
+    data class Edit(
+        val id: String,
+        override val meter: ParsedMeter,
+        override val today: LocalDate,
+        val note: String? = null,
+    ) : SaveReadingIntent
 }

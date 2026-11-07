@@ -3,6 +3,7 @@ package com.trackgas.app.tracking
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -13,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -61,14 +63,9 @@ internal fun LazyListScope.historyItems(
     items(ordered, key = { it.id }) { reading ->
         val date = dateText(reading.date, locale)
         val meter = stringResource(R.string.meter_number, meterNumbers.getValue(reading.installationId))
-        val role = when {
-            tracker.replacements.any { it.initialReadingId == reading.id } -> stringResource(R.string.initial_reading)
-            tracker.replacements.any { it.finalReadingId == reading.id } -> stringResource(R.string.final_reading)
-            else -> stringResource(R.string.ordinary_reading)
-        }
+        val value = stringResource(R.string.volume, numberText(reading.cubicMetres, locale, raw = true))
         val identity = stringResource(
-            R.string.reading_identity, date,
-            stringResource(R.string.volume, numberText(reading.cubicMetres, locale, raw = true)), meter, role,
+            R.string.reading_identity, date, value, meter,
         )
         val editLabel = if (installations.size == 1) stringResource(R.string.edit_description, date)
             else stringResource(R.string.edit_meter_description, identity)
@@ -83,16 +80,21 @@ internal fun LazyListScope.historyItems(
                     onLongClick = { onDelete(reading) },
                 )
                 .padding(vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(date, style = MaterialTheme.typography.titleMedium)
-            if (installations.size > 1) {
-                Text(stringResource(R.string.meter_role, meter, role), style = MaterialTheme.typography.bodyMedium)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(value, style = MaterialTheme.typography.headlineSmall)
+                if (installations.size > 1) {
+                    Text(meter, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-            Text(
-                stringResource(R.string.volume, numberText(reading.cubicMetres, locale, raw = true)),
-                style = MaterialTheme.typography.headlineSmall,
-            )
+            reading.note?.takeUnless { it.isBlank() }?.let { note ->
+                Text(note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         HorizontalDivider()
     }

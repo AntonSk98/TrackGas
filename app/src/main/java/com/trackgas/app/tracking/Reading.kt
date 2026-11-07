@@ -17,6 +17,7 @@ data class Reading(
     val date: LocalDate,
     val cubicMetres: BigDecimal,
     val installationId: String = ORIGINAL_INSTALLATION_ID,
+    val note: String? = null,
 ) {
     init {
         require(id.isNotBlank()) { "Reading identity must not be blank" }

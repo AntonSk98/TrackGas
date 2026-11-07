@@ -86,21 +86,23 @@ class ReadingValidationTest {
         assertThrows(IllegalArgumentException::class.java) { rejected.copy(errors = ReadingErrors()) }
     }
 
-    @Test fun replacementPickerAndFinalSaveResolveHistoricalDatesAndExcludeCounterpartOnEdit() {
-        val final = readings.last()
-        val baseline = Reading("baseline", final.date, BigDecimal("0"), "new")
+    @Test fun replacementDateStartsAnIndependentHistoryAndBackdatedDatesStayWithTheOldMeter() {
         val tracker = TrackerData(
-            readings + baseline,
-            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", final.date)),
-            listOf(MeterReplacement("boundary", final.date, ORIGINAL_INSTALLATION_ID, "new", final.id, baseline.id)),
+            readings,
+            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", today)),
         )
-        for (date in listOf(final.date, today, today.minusDays(2))) {
+        val finalDate = readings.last().date
+        for (date in listOf(finalDate, today.minusDays(2))) {
             val result = evaluateSave(tracker, SaveReadingIntent.Add(date, ParsedMeter.Required, today), "added") as ReadingValidation.Rejected
             assertEquals(result.errors.date, validateReadingDate(tracker, null, date, today))
         }
-        assertEquals(ReadingError.DUPLICATE_DATE, validateReadingDate(tracker, null, final.date, today))
-        assertNull(validateReadingDate(tracker, baseline.id, final.date, today))
-        assertNull(validateReadingDate(tracker, final.id, final.date, today))
+        assertEquals(ReadingError.DUPLICATE_DATE, validateReadingDate(tracker, null, finalDate, today))
+        assertNull(validateReadingDate(tracker, null, today, today))
+        assertEquals(
+            ReadingValidation.Accepted(Reading("new-reading", today, BigDecimal("0"), "new")),
+            evaluateSave(tracker, SaveReadingIntent.Add(today, parseMeter("0", Locale.US), today), "new-reading"),
+        )
+        assertEquals(ORIGINAL_INSTALLATION_ID, tracker.readings.last().installationId)
         assertEquals(ORIGINAL_INSTALLATION_ID, installationForDate(tracker, today.minusDays(2))?.id)
         assertEquals("new", installationForDate(tracker, today)?.id)
     }
@@ -117,7 +119,7 @@ class ReadingValidationTest {
         )
 
         assertEquals(current, tracker.currentInstallation)
-        assertEquals(current, installationForDate(tracker, today.minusDays(8)))
+        assertEquals(old, installationForDate(tracker, today.minusDays(8)))
         assertEquals(current.id, (evaluateSave(
             tracker,
             SaveReadingIntent.Add(today, ParsedMeter.Value("4".toBigDecimal()), today),

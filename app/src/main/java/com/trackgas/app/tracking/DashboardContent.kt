@@ -69,7 +69,6 @@ internal fun LazyListScope.dashboardItems(
             }
         }
     }
-    item(key = "local-notice") { LocalStorageNotice() }
     item(key = "consumption-summary") {
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -79,7 +78,7 @@ internal fun LazyListScope.dashboardItems(
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 val total = dashboard.total.cubicMetres
                 if (total == null) {

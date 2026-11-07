@@ -74,7 +74,7 @@ data class DateRange(val start: LocalDate, val endInclusive: LocalDate) {
  *
  * @property cubicMetres Null means no covered usage; numeric zero means measured coverage
  * with no consumption. These states must not be treated as interchangeable.
- * @property coveredDays Number of dates covered by source intervals in this range.
+ * @property coveredDays Number of distinct dates with a consumption contribution in this range.
  * @property totalDays Size of the entire requested range, including uncovered dates.
  * @property estimatedDistribution Whether any contribution comes from a multi-day interval.
  * This metadata is retained for calculations/tests but is not shown on the dashboard.
@@ -96,7 +96,7 @@ data class ConsumptionAmount(
 }
 
 /**
- * Allocates source-interval usage to its overlap with [range], without extrapolation.
+ * Allocates interval usage to its overlap with [range], without extrapolation.
  *
  * Each contribution is `interval delta * overlapping days / interval days`.
  * Whole intervals retain their exact decimal delta; partial slices use DECIMAL128
@@ -109,24 +109,63 @@ data class ConsumptionAmount(
  */
 fun allocate(intervals: List<ReadingInterval>, range: DateRange): ConsumptionAmount {
     requireNonOverlapping(intervals)
+    return allocateContributions(intervals.map(ReadingInterval::asContribution), range)
+}
+
+private data class ConsumptionContribution(
+    val range: DateRange,
+    val cubicMetres: BigDecimal,
+    val estimatedDistribution: Boolean,
+)
+
+private fun ReadingInterval.asContribution() = ConsumptionContribution(
+    DateRange(firstCoveredDate, lastCoveredDate),
+    cubicMetres,
+    estimatedDistribution,
+)
+
+private fun allocateContributions(
+    contributions: List<ConsumptionContribution>,
+    range: DateRange,
+): ConsumptionAmount {
     var total = BigDecimal.ZERO
-    var coveredDays = 0L
     var estimated = false
-    for (interval in intervals) {
-        val start = maxOf(range.start, interval.firstCoveredDate)
-        val end = minOf(range.endInclusive, interval.lastCoveredDate)
+    val coveredRanges = mutableListOf<DateRange>()
+    for (contribution in contributions) {
+        val start = maxOf(range.start, contribution.range.start)
+        val end = minOf(range.endInclusive, contribution.range.endInclusive)
         if (end < start) continue
         val overlap = ChronoUnit.DAYS.between(start, end) + 1
-        // Whole intervals retain their exact meter delta; partial slices use high precision.
+        // Whole contributions retain exact values; partial intervals use high precision.
         total = total.add(
-            if (overlap == interval.days) interval.cubicMetres
-            else interval.cubicMetres.multiply(BigDecimal.valueOf(overlap))
-                .divide(BigDecimal.valueOf(interval.days), MathContext.DECIMAL128),
+            if (overlap == contribution.range.days) contribution.cubicMetres
+            else contribution.cubicMetres.multiply(BigDecimal.valueOf(overlap))
+                .divide(BigDecimal.valueOf(contribution.range.days), MathContext.DECIMAL128),
         )
-        coveredDays += overlap
-        estimated = estimated || interval.estimatedDistribution
+        coveredRanges += DateRange(start, end)
+        estimated = estimated || contribution.estimatedDistribution
     }
+    val coveredDays = unionCoveredDays(coveredRanges)
     return ConsumptionAmount(if (coveredDays == 0L) null else total, coveredDays, range.days, estimated)
+}
+
+private fun unionCoveredDays(ranges: List<DateRange>): Long {
+    var days = 0L
+    var coveredThrough: LocalDate? = null
+    for (range in ranges.sortedBy { it.start }) {
+        val previousEnd = coveredThrough
+        when {
+            previousEnd == null || range.start > previousEnd -> {
+                days += range.days
+                coveredThrough = range.endInclusive
+            }
+            range.endInclusive > previousEnd -> {
+                days += ChronoUnit.DAYS.between(previousEnd, range.endInclusive)
+                coveredThrough = range.endInclusive
+            }
+        }
+    }
+    return days
 }
 
 /** One daily or monthly slice of consumption, distinct from an entered meter reading. */
@@ -144,23 +183,43 @@ data class Dashboard(
 
 /**
  * Projects all source readings onto [period], including intervals crossing its boundaries.
+ * A first reading on an installation's start date also contributes opening usage on that date.
  *
  * Weekly/monthly periods use daily rows; yearly periods use monthly rows. Uncovered
  * buckets are omitted, while known zero and estimated allocations remain visible.
  * No overlapping interval means a null total and an empty list of rows.
  */
 fun dashboard(readings: List<Reading>, period: CalendarPeriod): Dashboard =
-    dashboardFromIntervals(readingIntervals(readings), period)
+    dashboardFromContributions(
+        readingIntervals(readings).map(ReadingInterval::asContribution),
+        period,
+    )
 
-fun dashboard(tracker: TrackerData, period: CalendarPeriod): Dashboard =
-    dashboardFromIntervals(readingIntervals(tracker), period)
+fun dashboard(tracker: TrackerData, period: CalendarPeriod): Dashboard {
+    val intervals = readingIntervals(tracker)
+    val firstReadingByInstallation = tracker.readings.groupBy { it.installationId }
+        .mapValues { (_, readings) -> readings.minBy { it.date } }
+    val openingContributions = tracker.installations.mapNotNull { installation ->
+        val startDate = installation.startDate ?: return@mapNotNull null
+        val firstReading = firstReadingByInstallation[installation.id] ?: return@mapNotNull null
+        if (firstReading.date == startDate) {
+            ConsumptionContribution(DateRange(startDate, startDate), firstReading.cubicMetres, estimatedDistribution = false)
+        } else {
+            null
+        }
+    }
+    return dashboardFromContributions(intervals.map(ReadingInterval::asContribution) + openingContributions, period)
+}
 
-private fun dashboardFromIntervals(intervals: List<ReadingInterval>, period: CalendarPeriod): Dashboard {
-    val total = allocate(intervals, period.range)
+private fun dashboardFromContributions(
+    contributions: List<ConsumptionContribution>,
+    period: CalendarPeriod,
+): Dashboard {
+    val total = allocateContributions(contributions, period.range)
     return Dashboard(
         total,
         if (total.coveredDays == 0L) emptyList()
-        else period.buckets().map { ConsumptionBucket(it, allocate(intervals, it)) }
+        else period.buckets().map { ConsumptionBucket(it, allocateContributions(contributions, it)) }
             .filter { it.amount.coveredDays > 0 },
     )
 }

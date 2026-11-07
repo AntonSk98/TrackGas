@@ -46,11 +46,13 @@ internal fun ReadingFormLayout(
     editing: Boolean,
     displayedDate: String,
     value: String,
+    note: String,
     errors: ReadingErrors,
     pending: Boolean,
     failed: Boolean,
     loadState: ReadingLoadState,
     onValueChange: (String) -> Unit,
+    onNoteChange: (String) -> Unit,
     onChooseDate: () -> Unit,
     onRetryLoad: () -> Unit,
     onSave: () -> Unit,
@@ -112,6 +114,17 @@ internal fun ReadingFormLayout(
                             isError = errors.value != null,
                             supportingText = errors.value?.let { error -> { Text(stringResource(errorResource(error))) } },
                         )
+                        if (editing) {
+                            OutlinedTextField(
+                                value = note,
+                                onValueChange = onNoteChange,
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !pending,
+                                label = { Text(stringResource(R.string.reading_note_label)) },
+                                minLines = 2,
+                                maxLines = 4,
+                            )
+                        }
                         if (failed) {
                             Text(
                                 stringResource(R.string.save_storage_error),

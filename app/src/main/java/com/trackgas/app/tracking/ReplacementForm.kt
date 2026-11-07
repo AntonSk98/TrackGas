@@ -42,7 +42,6 @@ internal fun ReplacementForm(
     loadState: ReadingLoadState,
     onRetryLoad: () -> Unit,
     onConfirm: () -> Unit,
-    onAddFinal: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val pending = dialog.pending
@@ -71,12 +70,6 @@ internal fun ReplacementForm(
                         modifier = Modifier.fillMaxWidth(), readOnly = true, enabled = !pending,
                         label = { Text(stringResource(R.string.date)) }, singleLine = true,
                     )
-                    dialog.target.finalReading?.let {
-                        Text(stringResource(
-                            R.string.saved_final_value,
-                            stringResource(R.string.volume, numberText(it.cubicMetres, locale, raw = true)),
-                        ))
-                    }
                     if (unavailable != null) {
                         Text(
                             stringResource(replacementErrorResource(unavailable)),
@@ -96,11 +89,7 @@ internal fun ReplacementForm(
                     if (pending) Text(stringResource(R.string.replacing_meter))
                     FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = onDismiss, enabled = !pending) { Text(stringResource(R.string.cancel)) }
-                        if (unavailable == ReplacementError.MISSING_FINAL) {
-                            Button(onClick = onAddFinal, enabled = !pending && loadState == ReadingLoadState.READY) {
-                                Text(stringResource(R.string.add_reading))
-                            }
-                        } else if (unavailable == null) {
+                        if (unavailable == null) {
                             Button(
                                 onClick = onConfirm,
                                 enabled = !pending && loadState == ReadingLoadState.READY,
@@ -114,7 +103,6 @@ internal fun ReplacementForm(
 }
 
 private fun replacementErrorResource(error: ReplacementError): Int = when (error) {
-    ReplacementError.MISSING_FINAL -> R.string.replacement_missing_final
     ReplacementError.ALREADY_REPLACED -> R.string.replacement_already_replaced
     ReplacementError.OBSOLETE_TARGET -> R.string.replacement_obsolete
     ReplacementError.STALE_DATE -> R.string.replacement_stale_date

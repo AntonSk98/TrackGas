@@ -19,7 +19,6 @@ sealed interface SaveReadingResult {
 sealed interface DeleteReadingResult {
     data class Deleted(val snapshot: CommittedSnapshot) : DeleteReadingResult
     data object Missing : DeleteReadingResult
-    data object Protected : DeleteReadingResult
 }
 
 sealed interface ReplaceMeterResult {
@@ -28,7 +27,7 @@ sealed interface ReplaceMeterResult {
 }
 
 /**
- * Full committed tracker with installation-local chronology and explicit replacement boundaries.
+ * Full committed tracker with independent installation-local chronology.
  *
  * [revision] orders captures and commits within one repository instance, not across processes or
  * instances. It is not a database version or a reading count. Row order is unspecified; exact
@@ -115,7 +114,7 @@ interface ReadingRepository {
      */
     suspend fun delete(id: String): DeleteReadingResult
 
-    /** Atomically revalidates the expected final reading and starts the next installation at zero. */
+    /** Atomically revalidates the current installation and starts an empty installation. */
     suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult
 
     /** Parses and validates an entire CSV against a consistent committed tracker snapshot. */

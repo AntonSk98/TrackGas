@@ -1,5 +1,6 @@
 package com.trackgas.app.tracking
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -92,12 +93,19 @@ internal fun ConsumptionChart(
                 ProjectedConsumptionChart(projection, locale)
                 if (projection.temperatures.isNotEmpty()) {
                     averageTemperature?.let { mean ->
-                        Text(
-                            stringResource(R.string.temperature_mean, numberText(mean, locale)),
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                stringResource(R.string.temperature_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                stringResource(R.string.temperature, numberText(mean, locale)),
+                                modifier = Modifier.padding(bottom = 4.dp),
+                                style = MaterialTheme.typography.headlineLarge,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
                     }
                     ProjectedTemperatureChart(projection, locale)
                 }

@@ -8,7 +8,7 @@ Material 3.
 
 - Record, edit, and delete dated meter readings.
 - View consumption by week, month, or year; browse history separately.
-- Replace a meter with a same-day zero baseline for the new meter.
+- Start an independent history when replacing a meter.
 - Export and import readings as CSV.
 - Store data locally on the device; no account or server is required.
 
@@ -19,9 +19,17 @@ consecutive readings for the same meter; values from different meters are never
 subtracted. Gaps between readings are distributed evenly across covered days,
 and usage is not extrapolated beyond the last reading.
 
-To replace a meter, first save its final reading for today. Confirm **Replace
-meter** to start the next meter at zero on the same date. Replacement cannot be
-undone through the Replace meter action.
+Confirm **Replace meter** to start a new, empty installation dated today.
+Replacement does not require a final reading, add an automatic zero reading, or
+link the old and new meter histories. Readings and consumption remain independent
+for each installation. Replacement cannot be undone through the Replace meter
+action.
+
+The first reading for a replacement installation contributes its value to
+consumption on the installation's start date. If the previous meter also has
+consumption on that date, both amounts are included in that day's total. No
+reading is added automatically; a first reading entered after the start date
+remains a baseline until a later reading is recorded.
 
 ## CSV import and export
 
@@ -29,28 +37,33 @@ Choose **Tracker options > Export CSV** or **Import CSV** on either tab. The
 UTF-8, semicolon-delimited file has this header:
 
 ```csv
-meter_id;date;meter_value
-11111111-1111-4111-8111-111111111111;2026-10-27;1099.500
-11111111-1111-4111-8111-111111111111;2026-10-28;1105.000
-22222222-2222-4222-8222-222222222222;2026-10-28;0
-22222222-2222-4222-8222-222222222222;2026-10-29;3.250
+meter_id;date;meter_value;note
+11111111-1111-4111-8111-111111111111;2026-10-27;1099.500;
+11111111-1111-4111-8111-111111111111;2026-10-28;1105.000;Meter cabinet replaced
+22222222-2222-4222-8222-222222222222;2026-10-28;0;
+22222222-2222-4222-8222-222222222222;2026-10-29;3.250;
 ```
 
-Dates use `YYYY-MM-DD`; values use a dot decimal separator and preserve their
-precision. `meter_id` is the installation UUID, not a displayed meter number.
-Fields containing semicolons, quotes, or line breaks are quoted.
+The columns are the installation UUID (`meter_id`), reading date, cumulative
+reading in cubic metres, and an optional note. Dates use `YYYY-MM-DD`; values
+use a dot decimal separator and preserve their precision. Fields containing
+semicolons, quotes, or line breaks are quoted, with embedded quotes doubled.
+Import requires this four-column header; the previous three-column format is
+not supported.
 
 Import accepts only UUIDs already in the tracker. It replaces the complete
-history for each UUID in the file, recreating that meter under the same UUID;
-meters omitted from the file keep their readings. Replacement relationships
-involving imported meters are cleared, so CSV is not a complete tracker backup.
+reading history, including notes, for each UUID in the file while preserving
+that installation's identity; meters omitted from the file keep their readings.
 Unknown UUIDs reject the whole import. Duplicate rows for one UUID and date use
 the last row in file order. Meter values must remain chronological and
 nondecreasing, and usage intervals across meters must not overlap. Review the
-short warning and confirm to apply the import atomically.
+warning that included histories will be replaced and confirm to apply the
+import atomically. CSV contains readings, not a complete restorable tracker
+backup.
 
-The current meter is the one with the latest reading date. If dates tie, the
-installation with the later start date is current.
+The current installation is the one with the most recent date among its start
+date and latest reading; ties favor the later start date. Replacing a meter
+starts a new independent history without adding a reading to either installation.
 
 ## Storage and privacy
 

@@ -108,7 +108,7 @@ class TrackerViewModelTest {
         assertNull(vm.requestCsvImport())
         repo.csvPreviewOutcomes.send(Result.success(CsvImportPreviewResult.Ready(preview)))
         vm.readCsvImport(request) {
-            ByteArrayInputStream("meter_id;date;meter_value\n$meterId;${imported.date};100.2500\n".toByteArray())
+            ByteArrayInputStream("meter_id;date;meter_value;note\n$meterId;${imported.date};100.2500;\n".toByteArray())
         }
 
         runCurrent()
@@ -120,7 +120,7 @@ class TrackerViewModelTest {
         assertEquals(CsvImportState.Applying(request, preview), vm.state.csvImport)
         assertEquals(1, repo.csvConfirmations.size)
         repo.csvCommitOutcomes.send(Result.success(CsvImportCommitResult.Committed(CommittedSnapshot(2, TrackerData(
-            listOf(imported), listOf(MeterInstallation(meterId)), emptyList(),
+            listOf(imported), listOf(MeterInstallation(meterId)),
         )))))
         runCurrent()
         assertEquals(CsvImportState.Complete(request, 1), vm.state.csvImport)
@@ -207,7 +207,7 @@ class TrackerViewModelTest {
         repo.csvPreviewOutcomes.send(Result.success(CsvImportPreviewResult.Ready(preview)))
         vm.readCsvImport(importRequest) {
             ByteArrayInputStream(
-                "meter_id;date;meter_value\n$meterId;${today.minusDays(2)};99\n".toByteArray(),
+                "meter_id;date;meter_value;note\n$meterId;${today.minusDays(2)};99;\n".toByteArray(),
             )
         }
         runCurrent()
@@ -241,7 +241,7 @@ class TrackerViewModelTest {
         val unexpected = requireNotNull(vm.requestCsvImport())
         repo.csvPreviewOutcomes.send(Result.failure(IllegalStateException("private exception details")))
         vm.readCsvImport(unexpected) {
-            ByteArrayInputStream("meter_id;date;meter_value\n".toByteArray())
+            ByteArrayInputStream("meter_id;date;meter_value;note\n".toByteArray())
         }
         runCurrent()
         val fallback = vm.state.csvImport as CsvImportState.Failed
@@ -821,10 +821,14 @@ class TrackerViewModelTest {
         assertSame(editing, editing.completeReplacement(request, "session", null))
     }
 
-    private fun replaced(): TrackerData =
-        (evaluateReplacement(TrackerData(listOf(one, two)), ReplaceMeterIntent(
-            replacementTarget(TrackerData(listOf(one, two)), today), today,
-        ), "new", "baseline", "replacement") as ReplacementValidation.Accepted).tracker
+    private fun replaced(): TrackerData {
+        val tracker = TrackerData(listOf(one, two))
+        return (evaluateReplacement(
+            tracker,
+            ReplaceMeterIntent(replacementTarget(tracker, today), today),
+            "new",
+        ) as ReplacementValidation.Accepted).tracker
+    }
 
     @Test fun pendingReplacementLocksEveryMutationAndUsesSubmissionDateWithoutRetargeting() = runTest {
         val repo = ScriptedReadingRepository()
@@ -837,7 +841,7 @@ class TrackerViewModelTest {
         val before = vm.state
         vm.openReplacement()
         val opened = vm.state.dialog as ReadingDialog.Replacing
-        assertEquals(two, opened.target.finalReading)
+        assertEquals(listOf(one, two).sortedBy { it.id }, opened.target.expectedReadings)
         assertEquals(ReplacementPhase.Ready, opened.phase)
         date = today.plusDays(1)
         vm.replaceMeter(); runCurrent()
@@ -862,21 +866,23 @@ class TrackerViewModelTest {
         assertEquals(today.plusDays(1), (vm.state.dialog as ReadingDialog.Replacing).target.date)
     }
 
-    @Test fun replacementPrerequisiteRoutesToOrdinaryAddAndRepeatedDayIsUnavailable() = runTest {
+    @Test fun replacementNeedsNoFinalReadingAndRepeatedDayIsUnavailable() = runTest {
         val repo = ScriptedReadingRepository()
         val vm = TrackerViewModel(repo) { today }
         repo.deliver(listOf(one)); runCurrent()
         vm.openReplacement()
-        assertEquals(ReplacementPhase.Unavailable(ReplacementError.MISSING_FINAL), (vm.state.dialog as ReadingDialog.Replacing).phase)
+        assertEquals(ReplacementPhase.Ready, (vm.state.dialog as ReadingDialog.Replacing).phase)
+        val tracker = TrackerData(
+            readings = listOf(one),
+            installations = listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", today)),
+        )
+        repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Replaced(CommittedSnapshot(2, tracker))))
         vm.replaceMeter(); runCurrent()
-        assertTrue(repo.replacements.isEmpty())
-        vm.openAdd()
-        assertEquals(ReadingTarget.Add(today), (vm.state.dialog as ReadingDialog.Editing).target)
-        repo.saveOutcomes.send(Result.success(SaveReadingResult.Saved(CommittedSnapshot(2, listOf(one, two)))))
-        vm.save(today, "112.1250", Locale.US); runCurrent()
         assertEquals(ReadingDialog.Closed, vm.state.dialog)
-        assertTrue(repo.replacements.isEmpty())
-        repo.deliver(replaced(), 3); runCurrent()
+        assertEquals(listOf(one), vm.state.readings)
+        assertEquals("new", vm.state.tracker.currentInstallation.id)
+        assertEquals(1, repo.replacements.size)
+        repo.deliver(tracker, 3); runCurrent()
         vm.openReplacement()
         assertEquals(ReplacementPhase.Unavailable(ReplacementError.ALREADY_REPLACED), (vm.state.dialog as ReadingDialog.Replacing).phase)
     }
@@ -940,8 +946,10 @@ class TrackerViewModelTest {
         repo.deliver(tracker); runCurrent()
         vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH)
         val before = vm.state
-        assertEquals(listOf("baseline", two.id), vm.state.readings.take(2).map { it.id })
-        val metadataChange = tracker.copy(replacements = tracker.replacements.map { it.copy(id = "other-boundary-id") })
+        assertEquals(listOf(two.id, one.id), vm.state.readings.map { it.id })
+        val metadataChange = tracker.copy(installations = tracker.installations.map {
+            if (it.id == "new") it.copy(startDate = today.minusDays(1)) else it
+        })
         repo.deliver(metadataChange, 2); runCurrent()
         assertNotSame(before.dashboard, vm.state.dashboard)
         assertEquals(before.dashboard, vm.state.dashboard)
@@ -960,21 +968,20 @@ class TrackerViewModelTest {
         assertNotSame(originalProjection, vm.state.dashboard)
     }
 
-    @Test fun boundaryDeletionIsProtectedUpfrontAndAfterAStaleConfirmation() = runTest {
+    @Test fun readingsFromReplacedMetersRemainIndividuallyDeletable() = runTest {
         val repo = ScriptedReadingRepository()
         val vm = TrackerViewModel(repo) { today }
-        repo.deliver(listOf(one, two)); runCurrent()
+        val tracker = replaced()
+        repo.deliver(tracker); runCurrent()
         vm.openDelete(two)
-        repo.deleteOutcomes.send(Result.success(DeleteReadingResult.Protected))
+        assertEquals(DeletePhase.Ready, (vm.state.dialog as ReadingDialog.ConfirmingDeletion).phase)
+        repo.deleteOutcomes.send(Result.success(DeleteReadingResult.Deleted(
+            CommittedSnapshot(2, tracker.copy(readings = tracker.readings.filterNot { it.id == two.id })),
+        )))
         vm.delete(); runCurrent()
-        assertEquals(DeletePhase.Protected, (vm.state.dialog as ReadingDialog.ConfirmingDeletion).phase)
-        vm.delete(); runCurrent()
-        assertEquals(1, repo.deletes.size)
-        repo.deliver(replaced(), 2); runCurrent()
-        vm.dismissDialog(); vm.openDelete(two)
-        assertEquals(DeletePhase.Protected, (vm.state.dialog as ReadingDialog.ConfirmingDeletion).phase)
-        vm.delete(); runCurrent()
-        assertEquals(1, repo.deletes.size)
+        assertEquals(listOf(two.id), repo.deletes)
+        assertEquals(listOf(one), vm.state.readings)
+        assertEquals(ReadingDialog.Closed, vm.state.dialog)
     }
 }
 

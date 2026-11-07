@@ -10,8 +10,6 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Update
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
 import com.trackgas.app.tracking.*
 import com.trackgas.app.temperature.DailyTemperatureEntity
 import com.trackgas.app.temperature.TemperatureDao
@@ -35,23 +33,7 @@ data class ReadingEntity(
     val date: String,
     val cubicMetres: String,
     val installationId: String,
-)
-
-@Entity(
-    tableName = "replacements",
-    indices = [Index(value = ["date"], unique = true), Index(value = ["oldInstallationId"], unique = true),
-        Index(value = ["newInstallationId"], unique = true), Index(value = ["finalReadingId"], unique = true),
-        Index(value = ["initialReadingId"], unique = true)],
-    foreignKeys = [
-        ForeignKey(entity = InstallationEntity::class, parentColumns = ["id"], childColumns = ["oldInstallationId"], onDelete = ForeignKey.RESTRICT, onUpdate = ForeignKey.RESTRICT),
-        ForeignKey(entity = InstallationEntity::class, parentColumns = ["id"], childColumns = ["newInstallationId"], onDelete = ForeignKey.RESTRICT, onUpdate = ForeignKey.RESTRICT),
-        ForeignKey(entity = ReadingEntity::class, parentColumns = ["id"], childColumns = ["finalReadingId"], onDelete = ForeignKey.RESTRICT, onUpdate = ForeignKey.RESTRICT),
-        ForeignKey(entity = ReadingEntity::class, parentColumns = ["id"], childColumns = ["initialReadingId"], onDelete = ForeignKey.RESTRICT, onUpdate = ForeignKey.RESTRICT),
-    ],
-)
-data class ReplacementEntity(
-    @PrimaryKey val id: String, val date: String, val oldInstallationId: String,
-    val newInstallationId: String, val finalReadingId: String, val initialReadingId: String,
+    val note: String? = null,
 )
 
 private fun storedDate(date: String): LocalDate = try {
@@ -66,11 +48,6 @@ private fun storedIdentity(id: String): String {
 }
 
 internal fun InstallationEntity.toInstallation() = MeterInstallation(storedIdentity(id), startDate?.let(::storedDate))
-internal fun ReplacementEntity.toReplacement() = MeterReplacement(
-    storedIdentity(id), storedDate(date), storedIdentity(oldInstallationId), storedIdentity(newInstallationId),
-    storedIdentity(finalReadingId), storedIdentity(initialReadingId),
-)
-
 internal fun ReadingEntity.toReading(): Reading {
     if (id.isBlank()) throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored identity"))
     val parsedDate = try {
@@ -84,15 +61,15 @@ internal fun ReadingEntity.toReading(): Reading {
         throw StoredReadingDecodingException(error)
     }
     if (value.signum() < 0) throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored meter value"))
-    return Reading(id, parsedDate, value, storedIdentity(installationId))
+    return Reading(id, parsedDate, value, storedIdentity(installationId), note?.takeUnless { it.isBlank() })
 }
 
 internal fun Reading.toEntity(): ReadingEntity =
-    ReadingEntity(id, date.toString(), cubicMetres.toString(), installationId)
+    ReadingEntity(id, date.toString(), cubicMetres.toString(), installationId, note?.takeUnless { it.isBlank() })
 
 @Dao
 interface ReadingDao {
-    @Query("SELECT readings.* FROM readings LEFT JOIN installations ON readings.installationId = installations.id LEFT JOIN replacements ON readings.id = replacements.initialReadingId ORDER BY readings.date DESC, installations.startDate DESC, readings.id")
+    @Query("SELECT readings.* FROM readings LEFT JOIN installations ON readings.installationId = installations.id ORDER BY readings.date DESC, installations.startDate DESC, readings.id")
     fun observeAll(): Flow<List<ReadingEntity>>
 
     @Query("SELECT readings.* FROM readings LEFT JOIN installations ON readings.installationId = installations.id ORDER BY readings.date DESC, installations.startDate DESC, readings.id")
@@ -107,14 +84,8 @@ interface ReadingDao {
     @Query("SELECT * FROM installations ORDER BY startDate, id")
     suspend fun getInstallations(): List<InstallationEntity>
 
-    @Query("SELECT * FROM replacements ORDER BY date, id")
-    suspend fun getReplacements(): List<ReplacementEntity>
-
     @Insert
     suspend fun insertInstallation(installation: InstallationEntity)
-
-    @Insert
-    suspend fun insertReplacement(replacement: ReplacementEntity)
 
     @Insert
     suspend fun insert(reading: ReadingEntity)
@@ -128,14 +99,8 @@ interface ReadingDao {
     @Query("DELETE FROM readings WHERE installationId IN (:installationIds)")
     suspend fun deleteForInstallations(installationIds: List<String>)
 
-    @Query("DELETE FROM replacements WHERE oldInstallationId IN (:installationIds) OR newInstallationId IN (:installationIds)")
-    suspend fun deleteReplacementsForInstallations(installationIds: List<String>)
-
     @Query("DELETE FROM installations WHERE id IN (:installationIds)")
     suspend fun deleteInstallationsById(installationIds: List<String>)
-
-    @Query("DELETE FROM replacements")
-    suspend fun deleteReplacements()
 
     @Query("DELETE FROM readings")
     suspend fun deleteReadings()
@@ -147,8 +112,8 @@ interface ReadingDao {
 data class StoredReadingDateRange(val startDate: String?, val endDate: String?)
 
 @Database(
-    entities = [ReadingEntity::class, InstallationEntity::class, ReplacementEntity::class, DailyTemperatureEntity::class],
-    version = 3,
+    entities = [ReadingEntity::class, InstallationEntity::class, DailyTemperatureEntity::class],
+    version = 5,
     exportSchema = true,
 )
 abstract class ReadingDatabase : RoomDatabase() {
@@ -157,32 +122,8 @@ abstract class ReadingDatabase : RoomDatabase() {
 
     companion object {
         val INITIALIZE = object : Callback() {
-            override fun onCreate(db: SupportSQLiteDatabase) {
+            override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("INSERT INTO installations (id, startDate) VALUES (?, NULL)", arrayOf(UUID.randomUUID().toString()))
-            }
-        }
-
-        val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("CREATE TABLE IF NOT EXISTS installations (id TEXT NOT NULL PRIMARY KEY, startDate TEXT)")
-                db.execSQL("INSERT INTO installations (id, startDate) VALUES ('original', NULL)")
-                db.execSQL("CREATE TABLE readings_new (id TEXT NOT NULL PRIMARY KEY, date TEXT NOT NULL, cubicMetres TEXT NOT NULL, installationId TEXT NOT NULL, FOREIGN KEY(installationId) REFERENCES installations(id) ON UPDATE RESTRICT ON DELETE RESTRICT)")
-                db.execSQL("INSERT INTO readings_new (id, date, cubicMetres, installationId) SELECT id, date, cubicMetres, 'original' FROM readings")
-                db.execSQL("DROP TABLE readings")
-                db.execSQL("ALTER TABLE readings_new RENAME TO readings")
-                db.execSQL("CREATE UNIQUE INDEX index_readings_installationId_date ON readings (installationId, date)")
-                db.execSQL("CREATE TABLE replacements (id TEXT NOT NULL PRIMARY KEY, date TEXT NOT NULL, oldInstallationId TEXT NOT NULL, newInstallationId TEXT NOT NULL, finalReadingId TEXT NOT NULL, initialReadingId TEXT NOT NULL, FOREIGN KEY(oldInstallationId) REFERENCES installations(id) ON UPDATE RESTRICT ON DELETE RESTRICT, FOREIGN KEY(newInstallationId) REFERENCES installations(id) ON UPDATE RESTRICT ON DELETE RESTRICT, FOREIGN KEY(finalReadingId) REFERENCES readings(id) ON UPDATE RESTRICT ON DELETE RESTRICT, FOREIGN KEY(initialReadingId) REFERENCES readings(id) ON UPDATE RESTRICT ON DELETE RESTRICT)")
-                for (column in listOf("date", "oldInstallationId", "newInstallationId", "finalReadingId", "initialReadingId")) {
-                    db.execSQL("CREATE UNIQUE INDEX index_replacements_$column ON replacements ($column)")
-                }
-            }
-        }
-
-        val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    "CREATE TABLE IF NOT EXISTS daily_temperatures (date TEXT NOT NULL PRIMARY KEY, celsius TEXT NOT NULL)",
-                )
             }
         }
     }

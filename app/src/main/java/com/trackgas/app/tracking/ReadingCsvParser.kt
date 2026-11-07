@@ -41,6 +41,7 @@ data class CsvReadingRow(
     val date: LocalDate,
     val cubicMetres: BigDecimal,
     val physicalRow: Int,
+    val note: String? = null,
 )
 
 sealed interface CsvReadingValidation {
@@ -60,16 +61,18 @@ fun validateReadingCsv(text: String, knownInstallationIds: Set<String>): CsvRead
         is ReadingCsvParseResult.Parsed -> parsed.records
     }
     val header = records.firstOrNull()?.fields
-    if (header != listOf("meter_id", "date", "meter_value")) {
+    val expectedHeader = listOf("meter_id", "date", "meter_value", "note")
+    if (header != expectedHeader) {
         return CsvReadingValidation.Invalid(CsvImportError(CsvImportErrorCode.CSV_HEADER_INVALID, 1))
     }
+    val expectedFieldCount = expectedHeader.size
 
     val knownByUuid = knownInstallationIds.mapNotNull { id ->
         parseCanonicalUuid(id)?.let { it to id }
     }.toMap()
     val rows = mutableListOf<CsvReadingRow>()
     for (record in records.drop(1)) {
-        if (record.fields.size != 3) return CsvReadingValidation.Invalid(
+        if (record.fields.size != expectedFieldCount) return CsvReadingValidation.Invalid(
             CsvImportError(CsvImportErrorCode.CSV_ROW_INVALID, record.physicalRow),
         )
         val meterUuid = parseCanonicalUuid(record.fields[0]) ?: return CsvReadingValidation.Invalid(
@@ -97,7 +100,13 @@ fun validateReadingCsv(text: String, knownInstallationIds: Set<String>): CsvRead
         if (value.signum() < 0) return CsvReadingValidation.Invalid(
             CsvImportError(CsvImportErrorCode.CSV_VALUE_NEGATIVE, record.physicalRow, CsvImportField.METER_VALUE),
         )
-        rows += CsvReadingRow(installationId, date, value, record.physicalRow)
+        rows += CsvReadingRow(
+            installationId,
+            date,
+            value,
+            record.physicalRow,
+            record.fields[3].takeUnless { it.isBlank() },
+        )
     }
 
     // Updating a LinkedHashMap entry keeps output deterministic while retaining the last value.
@@ -130,13 +139,9 @@ internal fun csvImportCandidate(
     val imported = rows.map { row ->
         var id: String
         do { id = newReadingId() } while (id.isBlank() || !identities.add(id))
-        Reading(id, row.date, row.cubicMetres, row.installationId)
+        Reading(id, row.date, row.cubicMetres, row.installationId, row.note)
     }
-    val candidateReadings = retained + imported
-    val replacements = base.replacements.filterNot { replacement ->
-        replacement.oldInstallationId in affected || replacement.newInstallationId in affected
-    }
-    return base.copy(readings = candidateReadings, replacements = replacements)
+    return base.copy(readings = retained + imported)
 }
 
 internal sealed interface CsvImportCandidateValidation {

@@ -14,6 +14,10 @@ class LocalizedStringResourcesTest {
         val german = readStrings(resourceFile("values-de/strings.xml"))
 
         assertEquals(english.keys, german.keys)
+        assertFalse(
+            "German resources should use informal address",
+            german.values.any { Regex("\\b(Sie|Ihnen|Ihr|Ihre|Ihrem|Ihren|Ihres)\\b").containsMatchIn(it.text) },
+        )
         english.forEach { (key, value) ->
             val translated = german.getValue(key)
             assertEquals("translatable attribute for $key", value.translatable, translated.translatable)
