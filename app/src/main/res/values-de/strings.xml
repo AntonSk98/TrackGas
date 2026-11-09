@@ -1,4 +1,12 @@
 <resources>
+    <string name="observation_time">Ablesezeit</string>
+    <string name="choose_time">Uhrzeit auswählen, %1$s</string>
+    <string name="time_required">Ablesezeit auswählen.</string>
+    <string name="invalid_time">Gültige, in dieser Zeitzone existierende Zeit auswählen.</string>
+    <string name="future_time">Die Ablesezeit darf nicht in der Zukunft liegen.</string>
+    <string name="time_order">Die Ablesezeit muss zwischen den benachbarten Ablesungen liegen.</string>
+    <string name="csv_import_error_timestamp">Ungültiger oder zukünftiger Ablesezeitpunkt.</string>
+    <string name="csv_import_error_timezone">Ungültige Aufzeichnungszeitzone.</string>
     <string name="app_name">TrackGas</string>
     <string name="reminder_channel_name">Erinnerungen</string>
     <string name="reminder_title">Dein Gaszähler ruft</string>

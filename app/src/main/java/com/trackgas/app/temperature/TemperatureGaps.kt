@@ -1,47 +1,30 @@
 package com.trackgas.app.temperature
 
-import com.trackgas.app.tracking.DateRange
-import java.time.LocalDate
+import com.trackgas.app.tracking.Reading
+import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-/** Splits uncovered calendar days into contiguous requests no longer than 366 days. */
-internal fun missingRanges(range: DateRange, storedDates: Set<LocalDate>): List<DateRange> {
-    val missingRuns = mutableListOf<DateRange>()
-    var runStart: LocalDate? = null
-    var runEnd: LocalDate? = null
-
-    fun finishRun() {
-        val start = runStart ?: return
-        val end = requireNotNull(runEnd)
-        var chunkStart = start
-        while (true) {
-            val remainingDays = ChronoUnit.DAYS.between(chunkStart, end)
-            val chunkEnd = if (remainingDays >= MAX_CHUNK_DAYS) {
-                chunkStart.plusDays(MAX_CHUNK_DAYS)
-            } else {
-                end
-            }
-            missingRuns += DateRange(chunkStart, chunkEnd)
-            if (chunkEnd == end) break
-            chunkStart = chunkEnd.plusDays(1)
-        }
-        runStart = null
-        runEnd = null
+data class TemperatureInterval(val earlier: Reading, val later: Reading) {
+    val start: Instant get() = earlier.observedAt
+    val end: Instant get() = later.observedAt
+    val firstSample: Instant get() = start.truncatedTo(ChronoUnit.HOURS).let {
+        if (it < start) it.plus(1, ChronoUnit.HOURS) else it
     }
-
-    var date = range.start
-    while (true) {
-        if (date in storedDates) {
-            finishRun()
-        } else {
-            if (runStart == null) runStart = date
-            runEnd = date
-        }
-        if (date == range.endInclusive) break
-        date = date.plusDays(1)
-    }
-    finishRun()
-    return missingRuns
+    val hasSamples: Boolean get() = firstSample < end
+    fun matches(row: IntervalTemperatureEntity): Boolean =
+        row.earlierId == earlier.id && row.laterId == later.id &&
+            row.installationId == earlier.installationId &&
+            row.startEpoch == start.epochSecond && row.endEpoch == end.epochSecond
 }
 
-private const val MAX_CHUNK_DAYS = 365L
+fun readingIntervals(readings: List<Reading>): List<TemperatureInterval> =
+    readings.groupBy { it.installationId }.values.flatMap { meter ->
+        meter.sortedBy { it.date }.zipWithNext { a, b -> TemperatureInterval(a, b) }
+    }
+
+internal fun missingIntervals(readings: List<Reading>, stored: List<IntervalTemperatureEntity>, location: String) =
+    readingIntervals(readings).filter { interval ->
+        interval.hasSamples && stored.none { it.location == location && interval.matches(it) }
+    }
+
+internal fun MeterLocation.fingerprint(): String = "$displayName|$latitude|$longitude"

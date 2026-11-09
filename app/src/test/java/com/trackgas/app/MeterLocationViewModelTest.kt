@@ -60,7 +60,7 @@ class MeterLocationViewModelTest {
         assertEquals(saved, vm.state.meterLocation)
         assertEquals(MeterLocationDialog.Closed, vm.state.locationDialog)
         assertEquals(1, resolver.requests)
-        assertEquals(1, requester.locationRefreshes)
+        assertEquals(2, requester.requests)
     }
 
     @Test
@@ -125,7 +125,7 @@ class MeterLocationViewModelTest {
         saveAdd(vm)
         assertEquals(2, vm.state.readings.size)
         assertTrue((vm.state.locationDialog as MeterLocationDialog.Editing).requestedAfterAdd)
-        assertEquals(1, requester.requests)
+        assertEquals(2, requester.requests)
         vm.dismissMeterLocationDialog()
         assertEquals(MeterLocationDialog.Closed, vm.state.locationDialog)
 
@@ -133,16 +133,16 @@ class MeterLocationViewModelTest {
         saveAdd(vm)
         assertEquals(3, vm.state.readings.size)
         assertTrue((vm.state.locationDialog as MeterLocationDialog.Editing).requestedAfterAdd)
-        assertEquals(2, requester.requests)
+        assertEquals(3, requester.requests)
     }
 
     @Test
     fun temperatureEmissionsRefreshStateWithoutResettingPeriodOrTab() = runTest(dispatcher) {
         val temperatures = FakeTemperatureRepository()
         val vm = TrackerViewModel(
-            repository = MemoryReadingRepository(listOf(reading("old", today.minusDays(1)))),
+            repository = MemoryReadingRepository(listOf(reading("old", today.minusDays(1)), reading("new", today))),
             ioDispatcher = dispatcher,
-            temperature = services(temperatures = temperatures),
+            temperature = services(store = FakeLocationStore(saved), temperatures = temperatures),
             currentDate = { today },
         )
         runCurrent()
@@ -150,9 +150,10 @@ class MeterLocationViewModelTest {
         vm.selectPeriod(PeriodType.MONTH)
         vm.navigate(-1)
         val period = vm.state.period
-        val temperature = mapOf(today.minusDays(2) to "6".toBigDecimal())
+        val temperature = mapOf(today to "6".toBigDecimal())
 
-        temperatures.emit(temperature)
+        val interval = com.trackgas.app.temperature.TemperatureInterval(reading("old", today.minusDays(1)), reading("new", today))
+        temperatures.emit(listOf(interval.row(saved, "6")))
         runCurrent()
 
         assertEquals(temperature, vm.state.temperatures)
@@ -169,6 +170,43 @@ class MeterLocationViewModelTest {
             assertEquals(MeterLocationDialog.Closed, vm.state.locationDialog)
             assertEquals(2, vm.state.readings.size)
         }
+    }
+
+    @Test fun locationRoundTripAndBufferedOldEmissionNeverRestoreDeletedMeans() = runTest(dispatcher) {
+        val temperatures = FakeTemperatureRepository()
+        val readings = listOf(reading("old", today.minusDays(1)), reading("new", today))
+        val services = services(store = FakeLocationStore(saved), temperatures = temperatures)
+        val vm = TrackerViewModel(MemoryReadingRepository(readings), ioDispatcher = dispatcher,
+            temperature = services, currentDate = { today })
+        runCurrent()
+        val mean = com.trackgas.app.temperature.TemperatureInterval(readings[0], readings[1]).row(saved, "6")
+        temperatures.emit(listOf(mean)); runCurrent()
+        assertFalse(vm.state.temperatures.isEmpty())
+        vm.selectTab(TrackerTab.HISTORY)
+        vm.selectPeriod(PeriodType.MONTH)
+        val period = vm.state.period
+        services.coordinator.save(saved.copy(latitude = 50.0))
+        services.coordinator.save(saved)
+        runCurrent()
+        temperatures.emitStale(listOf(mean)); runCurrent()
+        assertTrue(vm.state.temperatures.isEmpty())
+        assertEquals(period, vm.state.period)
+        assertEquals(TrackerTab.HISTORY, vm.state.tab)
+    }
+
+    @Test fun acceptedTimeEditHidesMeansEvenBeforeTemperatureObservationCatchesUp() = runTest(dispatcher) {
+        val readings = listOf(reading("old", today.minusDays(1)), reading("new", today))
+        val repo = MemoryReadingRepository(readings)
+        val temperatures = FakeTemperatureRepository()
+        val vm = TrackerViewModel(repo, ioDispatcher = dispatcher,
+            temperature = services(store = FakeLocationStore(saved), temperatures = temperatures))
+        runCurrent()
+        temperatures.emit(listOf(com.trackgas.app.temperature.TemperatureInterval(readings[0], readings[1]).row(saved, "6")))
+        runCurrent()
+        assertFalse(vm.state.temperatures.isEmpty())
+        repo.update(readings.map { it.copy(observedAt = it.observedAt.plusSeconds(60)) })
+        runCurrent()
+        assertTrue(vm.state.temperatures.isEmpty())
     }
 
     private fun TestScope.saveAdd(vm: TrackerViewModel) {
@@ -225,20 +263,25 @@ class MeterLocationViewModelTest {
         var requests = 0
         var locationRefreshes = 0
         override fun requestCheck() { requests++ }
-        override fun requestLocationRefresh() { locationRefreshes++ }
     }
 
     private class FakeTemperatureRepository : TemperatureRepository {
-        private val state = MutableStateFlow<Map<LocalDate, java.math.BigDecimal>>(emptyMap())
-        override fun observe(): Flow<Map<LocalDate, java.math.BigDecimal>> = state
-        override suspend fun storedDates() = state.value.keys
-        override suspend fun upsert(temperatures: Map<LocalDate, java.math.BigDecimal>) {
-            state.value = state.value + temperatures
+        private val state = MutableStateFlow<List<com.trackgas.app.temperature.IntervalTemperatureEntity>>(emptyList())
+        private var committed = state.value
+        override fun observe() = state
+        override suspend fun stored() = committed
+        override suspend fun storeIfCurrent(temperature: com.trackgas.app.temperature.IntervalTemperatureEntity): Boolean {
+            emit(committed + temperature)
+            return true
         }
         override suspend fun deleteAll() {
-            state.value = emptyMap()
+            emit(emptyList())
         }
-        fun emit(temperatures: Map<LocalDate, java.math.BigDecimal>) {
+        fun emit(temperatures: List<com.trackgas.app.temperature.IntervalTemperatureEntity>) {
+            committed = temperatures
+            state.value = temperatures
+        }
+        fun emitStale(temperatures: List<com.trackgas.app.temperature.IntervalTemperatureEntity>) {
             state.value = temperatures
         }
     }
@@ -248,6 +291,10 @@ class MeterLocationViewModelTest {
         private var revision = 1L
         private var latestReadings = readings
         override fun observeReadings(): Flow<CommittedSnapshot> = snapshots
+        fun update(readings: List<Reading>) {
+            latestReadings = readings
+            snapshots.value = CommittedSnapshot(++revision, readings)
+        }
         override suspend fun save(intent: SaveReadingIntent): SaveReadingResult {
             val nextDate = when (intent) {
                 is SaveReadingIntent.Add -> intent.date ?: error("Test requires a date")

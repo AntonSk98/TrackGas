@@ -1,13 +1,20 @@
 package com.trackgas.app.data
 
-import com.trackgas.app.tracking.Reading
+import com.trackgas.app.Reading
 import java.math.BigDecimal
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ReadingEntityMappingTest {
+    @Test fun storedTimesMustAgreeWithDateAndBeMinutePrecise() {
+        val entity = Reading("a", LocalDate.parse("2026-10-28"), BigDecimal.ONE).toEntity()
+        assertThrows(StoredReadingDecodingException::class.java) { entity.copy(timezone = "Bad/Zone").toReading() }
+        assertThrows(StoredReadingDecodingException::class.java) { entity.copy(observedAt = entity.observedAt + 1).toReading() }
+        assertThrows(StoredReadingDecodingException::class.java) { entity.copy(date = "2026-10-27").toReading() }
+    }
     @Test fun noteSurvivesPersistenceMappingAndBlankNotesAreAbsent() {
         val reading = Reading(
             id = "reading",

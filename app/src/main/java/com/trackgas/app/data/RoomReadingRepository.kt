@@ -61,7 +61,7 @@ class RoomReadingRepository internal constructor(
                 } else {
                     check(dao.update(candidate.toEntity()) == 1) { "Reading disappeared during update" }
                 }
-                database.temperatures().pruneOutsideReadingRange()
+                database.temperatures().pruneObsoleteIntervals()
                 SaveRows.Accepted(readRows())
             }
             // withTransaction has returned successfully; only now issue a committed revision.
@@ -161,7 +161,7 @@ class RoomReadingRepository internal constructor(
                                 }
                                 candidate.tracker.readings.filter { it.installationId in affected }.forEach { dao.insert(it.toEntity()) }
                             }
-                            database.temperatures().pruneOutsideReadingRange()
+                            database.temperatures().pruneObsoleteIntervals()
                             ImportRows.Accepted(readRows())
                         }
                     }
@@ -186,7 +186,7 @@ class RoomReadingRepository internal constructor(
                     DeletionValidation.MISSING -> DeleteRows.Missing
                     DeletionValidation.ALLOWED -> {
                         check(dao.delete(id) == 1) { "Reading disappeared during delete" }
-                        database.temperatures().pruneOutsideReadingRange()
+                        database.temperatures().pruneObsoleteIntervals()
                         DeleteRows.Accepted(readRows())
                     }
                 }

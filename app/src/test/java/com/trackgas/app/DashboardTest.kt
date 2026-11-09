@@ -176,7 +176,7 @@ class DashboardTest {
         val base = replacementTracker("2026-10-04", "10.0000", "11.0000")
         val tracker = base.copy(readings = base.readings.map {
             when (it.id) {
-                "old-first" -> it.copy(date = LocalDate.parse("2026-10-01"))
+                "old-first" -> it.copy(date = LocalDate.parse("2026-10-01"), observedAt = java.time.Instant.parse("2026-10-01T08:00:00Z"))
                 "old-final" -> it.copy(cubicMetres = BigDecimal("1101.0000"))
                 else -> it
             }
@@ -201,7 +201,7 @@ class DashboardTest {
         assertEquals(BigDecimal("17.5000"), before.total.cubicMetres)
         val initial = source.readings.single { it.id == "new-initial" }
         val after = dashboard(source.copy(readings = source.readings + initial.copy(
-            id = "zero-next", date = initial.date.plusDays(1),
+            id = "zero-next", date = initial.date.plusDays(1), observedAt = initial.observedAt.plusSeconds(86400),
         )), selected)
         assertEquals(listOf(28, 29), after.buckets.map { it.range.start.dayOfMonth })
         assertEquals(0, after.buckets.last().amount.cubicMetres!!.signum())

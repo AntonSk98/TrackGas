@@ -3,7 +3,7 @@ package com.trackgas.app.tracking
 import java.time.LocalDate
 
 sealed interface ReadingTarget {
-    data class Add(val openingDate: LocalDate) : ReadingTarget
+    data class Add(val openingDate: LocalDate, val observedAt: java.time.Instant, val zone: java.time.ZoneId) : ReadingTarget
     data class Edit(val reading: Reading) : ReadingTarget
 }
 

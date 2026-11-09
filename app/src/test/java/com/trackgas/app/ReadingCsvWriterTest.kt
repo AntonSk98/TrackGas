@@ -2,7 +2,6 @@ package com.trackgas.app
 
 import com.trackgas.app.tracking.TrackerData
 import com.trackgas.app.tracking.MeterInstallation
-import com.trackgas.app.tracking.Reading
 import com.trackgas.app.tracking.readingCsv
 import com.trackgas.app.tracking.writeReadingCsv
 import com.trackgas.app.tracking.validateReadingCsv
@@ -22,7 +21,7 @@ class ReadingCsvWriterTest {
         }
         assertTrue(writeReadingCsv(TrackerData()) { stream })
         assertTrue(closed)
-        assertEquals("meter_id;date;meter_value;note\n", stream.toString("UTF-8"))
+        assertEquals("meter_id;timestamp;timezone;meter_value;note\n", stream.toString("UTF-8"))
     }
 
     @Test fun exportsExactMeterPrecisionAndQuotesNotesForRoundTrip() {
@@ -35,7 +34,7 @@ class ReadingCsvWriterTest {
         val csv = String(readingCsv(tracker), Charsets.UTF_8)
 
         assertEquals(
-            "meter_id;date;meter_value;note\n$meter;2026-10-28;123.4500;\"checked; pressure \"\"ok\"\"\r\nnext\"\n",
+            "meter_id;timestamp;timezone;meter_value;note\n$meter;2026-10-28T08:00Z;Z;123.4500;\"checked; pressure \"\"ok\"\"\r\nnext\"\n",
             csv,
         )
         val parsed = validateReadingCsv(csv, setOf(meter)) as CsvReadingValidation.Valid
@@ -45,7 +44,7 @@ class ReadingCsvWriterTest {
 
     @Test fun exportsMissingNoteAsAnEmptyFourthField() {
         val csv = String(readingCsv(TrackerData()), Charsets.UTF_8)
-        assertEquals("meter_id;date;meter_value;note\n", csv)
+        assertEquals("meter_id;timestamp;timezone;meter_value;note\n", csv)
     }
 
     @Test fun openWriteAndCloseFailuresAreReported() {

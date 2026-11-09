@@ -61,7 +61,7 @@ internal fun LazyListScope.historyItems(
         }
     }
     items(ordered, key = { it.id }) { reading ->
-        val date = dateText(reading.date, locale)
+        val date = readingDateTimeText(reading, locale)
         val meter = stringResource(R.string.meter_number, meterNumbers.getValue(reading.installationId))
         val value = stringResource(R.string.volume, numberText(reading.cubicMetres, locale, raw = true))
         val identity = stringResource(

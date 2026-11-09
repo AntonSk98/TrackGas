@@ -7,4 +7,5 @@ class TemperatureServices(
     val networkMonitor: NetworkMonitor,
     val temperatures: TemperatureRepository,
     val checks: TemperatureCheckRequester,
+    val coordinator: TemperatureCoordinator = TemperatureCoordinator(locationStore, temperatures),
 )

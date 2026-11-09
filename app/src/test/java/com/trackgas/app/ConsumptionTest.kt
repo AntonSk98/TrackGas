@@ -7,6 +7,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConsumptionTest {
+    @Test fun timeOnlyEditChangesWeatherWindowButNotCalendarConsumption() {
+        val original = listOf(reading(1, "100"), reading(4, "112"))
+        val changed = original.map { it.copy(observedAt = it.observedAt.plusSeconds(12 * 3600)) }
+        val range = DateRange(original.first().date, original.last().date)
+        assertEquals(allocate(readingIntervals(original), range), allocate(readingIntervals(changed), range))
+        val oldWeather = com.trackgas.app.temperature.readingIntervals(original).single()
+        val newWeather = com.trackgas.app.temperature.readingIntervals(changed).single()
+        assertNotEquals(oldWeather.start, newWeather.start)
+        assertNotEquals(oldWeather.end, newWeather.end)
+    }
+
     private fun reading(day: Int, value: String) =
         Reading("id-$day", LocalDate.of(2026, 10, day), BigDecimal(value))
 
@@ -71,8 +82,8 @@ class ConsumptionTest {
         val last = reading(4, "112")
         for (invalid in listOf(
             first.copy(id = last.id),
-            first.copy(date = last.date),
-            first.copy(date = last.date.plusDays(1)),
+            first.copy(date = last.date, observedAt = last.observedAt),
+            first.copy(date = last.date.plusDays(1), observedAt = last.observedAt.plusSeconds(86400)),
             first.copy(cubicMetres = BigDecimal("113")),
         )) {
             assertThrows(IllegalArgumentException::class.java) { ReadingInterval(invalid, last) }
@@ -81,7 +92,7 @@ class ConsumptionTest {
         for (invalid in listOf(
             listOf(first, last.copy(id = first.id)),
             listOf(first, last, reading(6, "120").copy(id = first.id)),
-            listOf(first, last.copy(date = first.date)),
+            listOf(first, last.copy(date = first.date, observedAt = first.observedAt)),
             listOf(first, last.copy(cubicMetres = BigDecimal("99"))),
         )) {
             assertThrows(IllegalArgumentException::class.java) { readingIntervals(invalid) }
@@ -193,10 +204,10 @@ class ConsumptionTest {
         val initial = tracker.readings.single { it.id == "new-first" }
         assertThrows(IllegalArgumentException::class.java) { ReadingInterval(final, initial) }
         assertThrows(IllegalArgumentException::class.java) {
-            ReadingInterval(final, initial.copy(date = final.date.plusDays(1), cubicMetres = BigDecimal("1200")))
+            ReadingInterval(final, initial.copy(date = final.date.plusDays(1), observedAt = final.observedAt.plusSeconds(86400), cubicMetres = BigDecimal("1200")))
         }
         assertThrows(IllegalArgumentException::class.java) {
-            readingIntervals(listOf(reading(27, "1100"), final, initial.copy(date = reading(27, "0").date),
+            readingIntervals(listOf(reading(27, "1100"), final, initial.copy(date = reading(27, "0").date, observedAt = reading(27, "0").observedAt),
                 reading(29, "3").copy(id = "overlap", installationId = "new")))
         }
         for (invalid in listOf(

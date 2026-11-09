@@ -1,16 +1,19 @@
 package com.trackgas.app.tracking
 
 import java.time.LocalDate
+import java.time.Instant
+import java.time.ZoneId
 
 /** Domain error codes mapped to localized field messages by [ReadingForm]. */
-enum class ReadingError { DATE_REQUIRED, FUTURE_DATE, DUPLICATE_DATE, VALUE_REQUIRED, INVALID_NUMBER, NEGATIVE_VALUE, BELOW_PREVIOUS, ABOVE_NEXT, MISSING_READING }
+enum class ReadingError { DATE_REQUIRED, FUTURE_DATE, DUPLICATE_DATE, VALUE_REQUIRED, INVALID_NUMBER, NEGATIVE_VALUE, BELOW_PREVIOUS, ABOVE_NEXT, MISSING_READING, TIME_REQUIRED, INVALID_TIME, FUTURE_TIME, TIME_ORDER }
 
 /** Independent date/value errors; both fields may be invalid in the same submission. */
 data class ReadingErrors(
     val date: ReadingError? = null,
     val value: ReadingError? = null,
+    val time: ReadingError? = null,
 ) {
-    val isEmpty: Boolean get() = date == null && value == null
+    val isEmpty: Boolean get() = date == null && value == null && time == null
 }
 
 sealed interface ReadingValidation {
@@ -53,7 +56,7 @@ fun evaluateSave(
 
 fun evaluateSave(tracker: TrackerData, intent: SaveReadingIntent.Add, addId: String): ReadingValidation =
     evaluateCandidate(tracker, addId, intent.date, intent.meter, intent.today,
-        intent.date?.let { installationForDate(tracker, it)?.id })
+        intent.date?.let { installationForDate(tracker, it)?.id }, time = intent.time, zone = intent.zone, now = intent.now)
 
 /** Pure Edit policy; the latest persisted target supplies its immutable identity and date. */
 fun evaluateSave(readings: List<Reading>, intent: SaveReadingIntent.Edit): ReadingValidation {
@@ -65,6 +68,8 @@ fun evaluateSave(tracker: TrackerData, intent: SaveReadingIntent.Edit): ReadingV
         ?: return ReadingValidation.Rejected(ReadingErrors(value = ReadingError.MISSING_READING))
     return evaluateCandidate(
         tracker, existing.id, existing.date, intent.meter, intent.today, existing.installationId, intent.note,
+        intent.time, existing.zone, intent.now,
+        existing.observedAt.takeIf { intent.time == existing.localTime.toString() },
     )
 }
 
@@ -76,6 +81,10 @@ private fun evaluateCandidate(
     today: LocalDate,
     installationId: String?,
     note: String? = null,
+    time: String,
+    zone: ZoneId,
+    now: Instant,
+    unchangedInstant: Instant? = null,
 ) : ReadingValidation {
     val others = tracker.readings.filter { it.id != id && it.installationId == installationId }
     val dateError = validateReadingDate(tracker, id, date, today)
@@ -90,9 +99,20 @@ private fun evaluateCandidate(
             ReadingError.ABOVE_NEXT
         else -> null
     }
-    val errors = ReadingErrors(dateError, valueError)
+    val instant = unchangedInstant ?: date?.let { observationInstant(it, time, zone) }
+    val timeError = when {
+        time.isBlank() -> ReadingError.TIME_REQUIRED
+        date == null -> null
+        instant == null -> ReadingError.INVALID_TIME
+        instant > now && dateError != ReadingError.FUTURE_DATE -> ReadingError.FUTURE_TIME
+        others.any { (it.date < date && it.observedAt >= instant) || (it.date > date && it.observedAt <= instant) } ->
+            ReadingError.TIME_ORDER
+        else -> null
+    }
+    val errors = ReadingErrors(dateError, valueError, timeError)
     if (!errors.isEmpty) return ReadingValidation.Rejected(errors)
     return ReadingValidation.Accepted(
-        Reading(id, checkNotNull(date), checkNotNull(value), checkNotNull(installationId), note?.takeUnless { it.isBlank() }),
+        Reading(id, checkNotNull(date), checkNotNull(value), checkNotNull(installationId), note?.takeUnless { it.isBlank() },
+            checkNotNull(instant), zone),
     )
 }

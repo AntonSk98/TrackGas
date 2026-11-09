@@ -14,8 +14,8 @@ class ReadingValidationTest {
         Reading("b", today.minusDays(1), BigDecimal("120")),
     )
     private fun validate(input: String, date: LocalDate? = today.minusDays(2), id: String = "new", locale: Locale = Locale.US) =
-        if (id == "new") evaluateSave(readings, SaveReadingIntent.Add(date, parseMeter(input, locale), today), id)
-        else evaluateSave(readings, SaveReadingIntent.Edit(id, parseMeter(input, locale), today))
+        if (id == "new") evaluateSave(readings, testAdd(date, parseMeter(input, locale), today), id)
+        else evaluateSave(readings, testEdit(id, parseMeter(input, locale), today))
 
     @Test fun rejectsInvalidValuesAndDatesWithoutMutation() {
         val original = readings.toList()
@@ -93,14 +93,14 @@ class ReadingValidationTest {
         )
         val finalDate = readings.last().date
         for (date in listOf(finalDate, today.minusDays(2))) {
-            val result = evaluateSave(tracker, SaveReadingIntent.Add(date, ParsedMeter.Required, today), "added") as ReadingValidation.Rejected
+            val result = evaluateSave(tracker, testAdd(date, ParsedMeter.Required, today), "added") as ReadingValidation.Rejected
             assertEquals(result.errors.date, validateReadingDate(tracker, null, date, today))
         }
         assertEquals(ReadingError.DUPLICATE_DATE, validateReadingDate(tracker, null, finalDate, today))
         assertNull(validateReadingDate(tracker, null, today, today))
         assertEquals(
             ReadingValidation.Accepted(Reading("new-reading", today, BigDecimal("0"), "new")),
-            evaluateSave(tracker, SaveReadingIntent.Add(today, parseMeter("0", Locale.US), today), "new-reading"),
+            evaluateSave(tracker, testAdd(today, parseMeter("0", Locale.US), today), "new-reading"),
         )
         assertEquals(ORIGINAL_INSTALLATION_ID, tracker.readings.last().installationId)
         assertEquals(ORIGINAL_INSTALLATION_ID, installationForDate(tracker, today.minusDays(2))?.id)
@@ -122,7 +122,7 @@ class ReadingValidationTest {
         assertEquals(old, installationForDate(tracker, today.minusDays(8)))
         assertEquals(current.id, (evaluateSave(
             tracker,
-            SaveReadingIntent.Add(today, ParsedMeter.Value("4".toBigDecimal()), today),
+            testAdd(today, ParsedMeter.Value("4".toBigDecimal()), today),
             "added",
         ) as ReadingValidation.Accepted).candidate.installationId)
     }

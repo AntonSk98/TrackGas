@@ -1,4 +1,12 @@
 <resources>
+    <string name="observation_time">Observation time</string>
+    <string name="choose_time">Choose time, %1$s</string>
+    <string name="time_required">Select the observation time.</string>
+    <string name="invalid_time">Select a valid time that exists in this timezone.</string>
+    <string name="future_time">Observation time cannot be in the future.</string>
+    <string name="time_order">Observation time must be between neighbouring readings.</string>
+    <string name="csv_import_error_timestamp">Invalid or future observation timestamp.</string>
+    <string name="csv_import_error_timezone">Invalid recording timezone.</string>
     <string name="app_name">TrackGas</string>
     <string name="reminder_channel_name">Reminders</string>
     <string name="reminder_title">Your gas meter is calling</string>

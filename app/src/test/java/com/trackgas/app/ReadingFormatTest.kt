@@ -4,8 +4,10 @@ import com.trackgas.app.tracking.PeriodType
 import com.trackgas.app.tracking.bucketText
 import com.trackgas.app.tracking.dateText
 import com.trackgas.app.tracking.numberText
+import com.trackgas.app.tracking.timeText
 import java.math.BigDecimal
 import java.time.LocalDate
+import java.time.LocalTime
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,6 +15,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReadingFormatTest {
+    @Test fun observationTimeAlwaysUses24HourFormat() {
+        assertEquals("08:05", timeText(LocalTime.of(8, 5), Locale.GERMANY))
+        assertEquals("20:15", timeText(LocalTime.of(20, 15), Locale.US))
+        assertEquals("00:00", timeText(LocalTime.MIDNIGHT, Locale.US))
+        assertEquals("12:00", timeText(LocalTime.NOON, Locale.US))
+    }
+
     @Test fun rawValuesKeepTrailingZerosForEditing() {
         assertEquals("100.0100", numberText(BigDecimal("100.0100"), Locale.US, raw = true))
         assertEquals("100,0100", numberText(BigDecimal("100.0100"), Locale.GERMANY, raw = true))

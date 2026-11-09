@@ -18,7 +18,8 @@ enum class CsvImportErrorCode {
     CSV_ROW_INVALID,
     CSV_METER_ID_INVALID,
     CSV_METER_UNKNOWN,
-    CSV_DATE_INVALID,
+    CSV_TIMESTAMP_INVALID,
+    CSV_TIMEZONE_INVALID,
     CSV_VALUE_INVALID,
     CSV_VALUE_NEGATIVE,
     CSV_METER_HISTORY_INVALID,
@@ -27,7 +28,7 @@ enum class CsvImportErrorCode {
 }
 
 enum class CsvImportField(val csvName: String) {
-    METER_ID("meter_id"), DATE("date"), METER_VALUE("meter_value"),
+    METER_ID("meter_id"), TIMESTAMP("timestamp"), TIMEZONE("timezone"), METER_VALUE("meter_value"),
 }
 
 data class CsvImportError(
@@ -42,6 +43,8 @@ data class CsvReadingRow(
     val cubicMetres: BigDecimal,
     val physicalRow: Int,
     val note: String? = null,
+    val observedAt: java.time.Instant,
+    val zone: java.time.ZoneId,
 )
 
 sealed interface CsvReadingValidation {
@@ -50,7 +53,9 @@ sealed interface CsvReadingValidation {
 }
 
 /** Validates the exact export header and field formats without consulting storage. */
-fun validateReadingCsv(text: String, knownInstallationIds: Set<String>): CsvReadingValidation {
+fun validateReadingCsv(
+    text: String, knownInstallationIds: Set<String>, now: java.time.Instant = java.time.Instant.now(),
+): CsvReadingValidation {
     val records = when (val parsed = parseReadingCsv(text)) {
         is ReadingCsvParseResult.Malformed -> return CsvReadingValidation.Invalid(
             CsvImportError(
@@ -61,7 +66,7 @@ fun validateReadingCsv(text: String, knownInstallationIds: Set<String>): CsvRead
         is ReadingCsvParseResult.Parsed -> parsed.records
     }
     val header = records.firstOrNull()?.fields
-    val expectedHeader = listOf("meter_id", "date", "meter_value", "note")
+    val expectedHeader = listOf("meter_id", "timestamp", "timezone", "meter_value", "note")
     if (header != expectedHeader) {
         return CsvReadingValidation.Invalid(CsvImportError(CsvImportErrorCode.CSV_HEADER_INVALID, 1))
     }
@@ -81,14 +86,22 @@ fun validateReadingCsv(text: String, knownInstallationIds: Set<String>): CsvRead
         val installationId = knownByUuid[meterUuid] ?: return CsvReadingValidation.Invalid(
             CsvImportError(CsvImportErrorCode.CSV_METER_UNKNOWN, record.physicalRow, CsvImportField.METER_ID),
         )
-        val date = try {
-            LocalDate.parse(record.fields[1]).takeIf { it.toString() == record.fields[1] }
-        } catch (_: DateTimeParseException) {
+        val zone = try { java.time.ZoneId.of(record.fields[2]) } catch (_: java.time.DateTimeException) {
             null
         } ?: return CsvReadingValidation.Invalid(
-            CsvImportError(CsvImportErrorCode.CSV_DATE_INVALID, record.physicalRow, CsvImportField.DATE),
+            CsvImportError(CsvImportErrorCode.CSV_TIMEZONE_INVALID, record.physicalRow, CsvImportField.TIMEZONE),
         )
-        val valueText = record.fields[2]
+        val timestamp = try {
+            record.fields[1].takeIf {
+                Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(?:Z|[+-][0-9]{2}:[0-9]{2})").matches(it)
+            }?.let(java.time.OffsetDateTime::parse)?.takeIf {
+                it.offset in zone.rules.getValidOffsets(it.toLocalDateTime()) && it.toInstant() <= now
+            }
+        } catch (_: java.time.DateTimeException) { null } ?: return CsvReadingValidation.Invalid(
+            CsvImportError(CsvImportErrorCode.CSV_TIMESTAMP_INVALID, record.physicalRow, CsvImportField.TIMESTAMP),
+        )
+        val date = timestamp.toLocalDate()
+        val valueText = record.fields[3]
         if (!METER_VALUE_PATTERN.matches(valueText)) return CsvReadingValidation.Invalid(
             CsvImportError(CsvImportErrorCode.CSV_VALUE_INVALID, record.physicalRow, CsvImportField.METER_VALUE),
         )
@@ -105,7 +118,8 @@ fun validateReadingCsv(text: String, knownInstallationIds: Set<String>): CsvRead
             date,
             value,
             record.physicalRow,
-            record.fields[3].takeUnless { it.isBlank() },
+            record.fields[4].takeUnless { it.isBlank() },
+            timestamp.toInstant(), zone,
         )
     }
 
@@ -139,7 +153,7 @@ internal fun csvImportCandidate(
     val imported = rows.map { row ->
         var id: String
         do { id = newReadingId() } while (id.isBlank() || !identities.add(id))
-        Reading(id, row.date, row.cubicMetres, row.installationId, row.note)
+        Reading(id, row.date, row.cubicMetres, row.installationId, row.note, row.observedAt, row.zone)
     }
     return base.copy(readings = retained + imported)
 }
@@ -166,10 +180,10 @@ private fun csvImportHistoryError(
     violation: ReadingCollectionViolation,
 ): CsvImportError {
     val source = when (violation) {
-        ReadingCollectionViolation.DECREASING_VALUE -> candidate.readings.groupBy { it.installationId }
+        ReadingCollectionViolation.DECREASING_VALUE, ReadingCollectionViolation.TIMESTAMP_ORDER -> candidate.readings.groupBy { it.installationId }
             .values.asSequence()
             .flatMap { meterReadings -> meterReadings.sortedBy { it.date }.zipWithNext().asSequence() }
-            .firstOrNull { (earlier, later) -> earlier.cubicMetres > later.cubicMetres }
+            .firstOrNull { (earlier, later) -> earlier.cubicMetres > later.cubicMetres || earlier.observedAt >= later.observedAt }
             ?.second
             ?.let { offending -> rows.firstOrNull { it.installationId == offending.installationId && it.date == offending.date } }
         ReadingCollectionViolation.OVERLAPPING_COVERAGE -> overlappingReadingCoverage(candidate.readings)
@@ -182,7 +196,7 @@ private fun csvImportHistoryError(
     }
     val field = when (violation) {
         ReadingCollectionViolation.DECREASING_VALUE -> CsvImportField.METER_VALUE
-        ReadingCollectionViolation.OVERLAPPING_COVERAGE -> CsvImportField.DATE
+        ReadingCollectionViolation.OVERLAPPING_COVERAGE, ReadingCollectionViolation.TIMESTAMP_ORDER -> CsvImportField.TIMESTAMP
         else -> null
     }
     return CsvImportError(CsvImportErrorCode.CSV_METER_HISTORY_INVALID, source?.physicalRow, field)

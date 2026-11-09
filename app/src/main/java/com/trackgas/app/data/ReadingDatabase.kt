@@ -11,7 +11,7 @@ import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Update
 import com.trackgas.app.tracking.*
-import com.trackgas.app.temperature.DailyTemperatureEntity
+import com.trackgas.app.temperature.IntervalTemperatureEntity
 import com.trackgas.app.temperature.TemperatureDao
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -34,6 +34,8 @@ data class ReadingEntity(
     val cubicMetres: String,
     val installationId: String,
     val note: String? = null,
+    val observedAt: Long,
+    val timezone: String,
 )
 
 private fun storedDate(date: String): LocalDate = try {
@@ -61,11 +63,19 @@ internal fun ReadingEntity.toReading(): Reading {
         throw StoredReadingDecodingException(error)
     }
     if (value.signum() < 0) throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored meter value"))
-    return Reading(id, parsedDate, value, storedIdentity(installationId), note?.takeUnless { it.isBlank() })
+    return try {
+        Reading(id, parsedDate, value, storedIdentity(installationId), note?.takeUnless { it.isBlank() },
+            java.time.Instant.ofEpochSecond(observedAt), java.time.ZoneId.of(timezone))
+    } catch (error: java.time.DateTimeException) {
+        throw StoredReadingDecodingException(error)
+    } catch (error: IllegalArgumentException) {
+        throw StoredReadingDecodingException(error)
+    }
 }
 
 internal fun Reading.toEntity(): ReadingEntity =
-    ReadingEntity(id, date.toString(), cubicMetres.toString(), installationId, note?.takeUnless { it.isBlank() })
+    ReadingEntity(id, date.toString(), cubicMetres.toString(), installationId, note?.takeUnless { it.isBlank() },
+        observedAt.epochSecond, zone.id)
 
 @Dao
 interface ReadingDao {
@@ -112,8 +122,8 @@ interface ReadingDao {
 data class StoredReadingDateRange(val startDate: String?, val endDate: String?)
 
 @Database(
-    entities = [ReadingEntity::class, InstallationEntity::class, DailyTemperatureEntity::class],
-    version = 5,
+    entities = [ReadingEntity::class, InstallationEntity::class, IntervalTemperatureEntity::class],
+    version = 6,
     exportSchema = true,
 )
 abstract class ReadingDatabase : RoomDatabase() {

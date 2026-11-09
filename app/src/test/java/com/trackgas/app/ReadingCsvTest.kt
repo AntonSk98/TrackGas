@@ -1,7 +1,6 @@
 package com.trackgas.app
 
 import com.trackgas.app.tracking.MeterInstallation
-import com.trackgas.app.tracking.Reading
 import com.trackgas.app.tracking.TrackerData
 import com.trackgas.app.tracking.readingCsv
 import java.time.LocalDate
@@ -11,7 +10,7 @@ import org.junit.Test
 
 class ReadingCsvTest {
     @Test fun emptyTrackerContainsOnlyHeader() {
-        assertEquals("meter_id;date;meter_value;note\n", readingCsv(TrackerData()).toString(Charsets.UTF_8))
+        assertEquals("meter_id;timestamp;timezone;meter_value;note\n", readingCsv(TrackerData()).toString(Charsets.UTF_8))
     }
 
     @Test fun ordersAllReadingsByDateAndInstallationAndPreservesDecimals() {
@@ -26,11 +25,11 @@ class ReadingCsvTest {
             installations = listOf(MeterInstallation("new", date), MeterInstallation("original")),
         )
         assertEquals(
-            "meter_id;date;meter_value;note\n" +
-                "original;2026-10-27;999;\n" +
-                "original;2026-10-28;1105.0000;\n" +
-                "new;2026-10-28;0.00;\n" +
-                "new;2026-10-29;12.300;\n",
+            "meter_id;timestamp;timezone;meter_value;note\n" +
+                "original;2026-10-27T08:00Z;Z;999;\n" +
+                "original;2026-10-28T08:00Z;Z;1105.0000;\n" +
+                "new;2026-10-28T08:00Z;Z;0.00;\n" +
+                "new;2026-10-29T08:00Z;Z;12.300;\n",
             readingCsv(tracker).toString(Charsets.UTF_8),
         )
     }
@@ -42,7 +41,7 @@ class ReadingCsvTest {
             installations = listOf(MeterInstallation(id)),
         )
         assertEquals(
-            "meter_id;date;meter_value;note\n\"m;\"\"\r\nä\";2026-10-28;1.20;\n",
+            "meter_id;timestamp;timezone;meter_value;note\n\"m;\"\"\r\nä\";2026-10-28T08:00Z;Z;1.20;\n",
             readingCsv(tracker).toString(Charsets.UTF_8),
         )
     }
@@ -59,9 +58,9 @@ class ReadingCsvTest {
                 ),
             )
             assertEquals(
-                "meter_id;date;meter_value;note\n" +
-                    "original;2026-10-28;123.450;\n" +
-                    "original;2026-10-30;125.750;\n",
+                "meter_id;timestamp;timezone;meter_value;note\n" +
+                    "original;2026-10-28T08:00Z;Z;123.450;\n" +
+                    "original;2026-10-30T08:00Z;Z;125.750;\n",
                 readingCsv(tracker).toString(Charsets.UTF_8),
             )
         } finally {
@@ -83,11 +82,11 @@ class ReadingCsvTest {
             installations = listOf(MeterInstallation(first), MeterInstallation(second, date)),
         )
         assertEquals(
-            "meter_id;date;meter_value;note\n" +
-                "11111111-1111-4111-8111-111111111111;2026-10-27;1099.500;\n" +
-                "11111111-1111-4111-8111-111111111111;2026-10-28;1105.000;\n" +
-                "22222222-2222-4222-8222-222222222222;2026-10-28;1.000;\n" +
-                "22222222-2222-4222-8222-222222222222;2026-10-29;3.250;\n",
+            "meter_id;timestamp;timezone;meter_value;note\n" +
+                "11111111-1111-4111-8111-111111111111;2026-10-27T08:00Z;Z;1099.500;\n" +
+                "11111111-1111-4111-8111-111111111111;2026-10-28T08:00Z;Z;1105.000;\n" +
+                "22222222-2222-4222-8222-222222222222;2026-10-28T08:00Z;Z;1.000;\n" +
+                "22222222-2222-4222-8222-222222222222;2026-10-29T08:00Z;Z;3.250;\n",
             readingCsv(tracker).toString(Charsets.UTF_8),
         )
     }

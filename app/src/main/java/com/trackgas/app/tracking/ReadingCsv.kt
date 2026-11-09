@@ -11,11 +11,15 @@ fun readingCsv(tracker: TrackerData): ByteArray {
         },
     )
     return buildString {
-        append("meter_id;date;meter_value;note\n")
+        append("meter_id;timestamp;timezone;meter_value;note\n")
         rows.forEach { reading ->
             append(csvField(reading.installationId))
             append(';')
-            append(csvField(reading.date.toString()))
+            append(csvField(reading.observedAt.atZone(reading.zone).format(
+                java.time.format.DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mmXXX"),
+            )))
+            append(';')
+            append(csvField(reading.zone.id))
             append(';')
             append(csvField(reading.cubicMetres.toPlainString()))
             append(';')

@@ -1,120 +1,91 @@
 # TrackGas
 
-TrackGas is an offline Android app for recording cumulative gas-meter readings
-and viewing consumption over time. It is built with Kotlin, Jetpack Compose, and
-Material 3.
+**Understand your gas use, one reading at a time.**
 
-## Features
+TrackGas is a simple Android app for logging gas-meter readings, following your
+consumption, and comparing it with outdoor temperatures. No account needed.
 
-- Record, edit, and delete dated meter readings.
-- View consumption by week, month, or year; browse history separately.
-- Start an independent history when replacing a meter.
-- Export and import readings as CSV.
-- Store data locally on the device; no account or server is required.
+## What you can do
 
-## Meter readings and consumption
+- **Track your consumption** with weekly, monthly, and yearly charts.
+- **Compare gas use with the weather** using temperatures for the time between readings.
+- **Keep a reading history** with the date, time, and optional notes.
+- **Get reminders** to record your meter reading.
+- **Replace your meter** without losing the old meter's history.
+- **Export readings to CSV** for your own records or a spreadsheet.
+- **Use English or German**, and record readings even without an internet connection.
 
-Readings are cumulative values in cubic metres. Consumption is calculated from
-consecutive readings for the same meter; values from different meters are never
-subtracted. Gaps between readings are distributed evenly across covered days,
-and usage is not extrapolated beyond the last reading.
+## Get started
 
-Confirm **Replace meter** to start a new, empty installation dated today.
-Replacement does not require a final reading, add an automatic zero reading, or
-link the old and new meter histories. Readings and consumption remain independent
-for each installation. Replacement cannot be undone through the Replace meter
-action.
+Download an APK from [GitHub Releases](https://github.com/AntonSk98/TrackGas/releases)
+and install it on an Android device running Android 8.0 or later.
 
-The first reading for a replacement installation contributes its value to
-consumption on the installation's start date. If the previous meter also has
-consumption on that date, both amounts are included in that day's total. No
-reading is added automatically; a first reading entered after the start date
-remains a baseline until a later reading is recorded.
+1. Tap **Add** and enter the number shown on your gas meter, in cubic metres.
+2. Select when you read the meter using the date and time pickers.
+3. Add a second reading on a later day to see your consumption.
+4. Set your meter's location to include outdoor temperatures in the charts.
+
+You can record one reading per meter per day. Use **History** to correct a value
+or time, add a note, or delete a reading.
+
+> **Updating from the older date-only version?** This version requires a fresh
+> installation or clearing the app's data. Keep a copy of any readings you need
+> before doing so. Old CSV files cannot be imported into this version.
+
+## Understanding the charts
+
+Consumption is the difference between consecutive readings. If you skip days,
+the app spreads that consumption evenly across the days between readings.
+
+Temperatures come from [Open-Meteo](https://open-meteo.com/) and represent the
+average weather between your reading times. For readings several days apart,
+the same average is shown across those days, so daily comparisons are approximate.
+Recent temperatures may take a few days to become available. You can keep logging
+readings while the app waits for weather data.
+
+## Your data stays on your device
+
+Readings are stored locally, with no account or cloud backup. An internet
+connection is only needed for location search and weather updates; these use
+your selected location, not your meter readings.
+
+**Uninstalling the app or clearing its data deletes your history.** Exported CSV
+files remain wherever you saved them, so keep them somewhere private.
 
 ## CSV import and export
 
-Choose **Tracker options > Export CSV** or **Import CSV** on either tab. The
-UTF-8, semicolon-delimited file has this header:
+Open **Tracker options > Export CSV** to save your readings and notes.
+
+**Import CSV** replaces the history of the meters included in the file after
+you confirm. Other meters are left unchanged. Only meters already known to the
+app can be imported, so **CSV is not a full backup and cannot restore a tracker
+after reinstalling**. Weather data is fetched again when needed.
+
+<details>
+<summary>CSV format reference</summary>
+
+Files use UTF-8, semicolons between columns, and this exact header:
 
 ```csv
-meter_id;date;meter_value;note
-11111111-1111-4111-8111-111111111111;2026-10-27;1099.500;
-11111111-1111-4111-8111-111111111111;2026-10-28;1105.000;Meter cabinet replaced
-22222222-2222-4222-8222-222222222222;2026-10-28;0;
-22222222-2222-4222-8222-222222222222;2026-10-29;3.250;
+meter_id;timestamp;timezone;meter_value;note
+11111111-1111-4111-8111-111111111111;2026-11-06T08:15+01:00;Europe/Berlin;123.450;
 ```
 
-The columns are the installation UUID (`meter_id`), reading date, cumulative
-reading in cubic metres, and an optional note. Dates use `YYYY-MM-DD`; values
-use a dot decimal separator and preserve their precision. Fields containing
-semicolons, quotes, or line breaks are quoted, with embedded quotes doubled.
-Import requires this four-column header; the previous three-column format is
-not supported.
+The columns contain the meter's installation ID, reading date/time with UTC
+offset, recording timezone, cumulative value in cubic metres, and an optional
+note. Values use a decimal point without thousands separators. Times use minute
+precision, and the offset must match the timezone. Fields containing semicolons,
+quotes, or line breaks use CSV quoting, with embedded quotes doubled.
 
-Import accepts only UUIDs already in the tracker. It replaces the complete
-reading history, including notes, for each UUID in the file while preserving
-that installation's identity; meters omitted from the file keep their readings.
-Unknown UUIDs reject the whole import. Duplicate rows for one UUID and date use
-the last row in file order. Meter values must remain chronological and
-nondecreasing, and usage intervals across meters must not overlap. Review the
-warning that included histories will be replaced and confirm to apply the
-import atomically. CSV contains readings, not a complete restorable tracker
-backup.
+For duplicate readings on the same meter and local date, the last row wins.
+Old date-only CSV formats are not supported.
 
-The current installation is the one with the most recent date among its start
-date and latest reading; ties favor the later start date. Replacing a meter
-starts a new independent history without adding a reading to either installation.
+</details>
 
-## Storage and privacy
+## Building from source
 
-Readings and meter history are stored in an app-private Room database. Data is
-available offline and is not backed up to the cloud. Uninstalling the app or
-clearing its data removes the tracker. CSV files saved outside the app-private
-directory may be accessible to other apps or people, depending on their location.
+Open the project in Android Studio with Android SDK 35 and Build Tools 36.0.0.
+With a JDK configured, build using `.\gradlew.bat :app:assembleDebug` or run local
+tests using `.\gradlew.bat :app:testDebugUnitTest`.
 
-## Build and test
-
-Requires Android Studio, the Android SDK (API 35 / Build Tools 36.0.0), and a
-JDK. On this project setup, use Android Studio's bundled JBR:
-
-```powershell
-$env:JAVA_HOME = Join-Path $env:USERPROFILE "android studio\jbr"
-$env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA "Android\Sdk"
-.\gradlew.bat :app:assembleDebug
-```
-
-Run JVM tests with:
-
-```powershell
-.\gradlew.bat :app:testDebugUnitTest
-```
-
-From Git Bash, use the Unix-style wrapper and paths:
-
-```bash
-export JAVA_HOME="$(cygpath -u "$USERPROFILE")/android studio/jbr"
-export ANDROID_HOME="$(cygpath -u "$LOCALAPPDATA")/Android/Sdk"
-./gradlew :app:assembleDebug
-```
-
-Run JVM tests from Git Bash with:
-
-```bash
-./gradlew :app:testDebugUnitTest
-```
-
-The debug APK is `app/build/outputs/apk/debug/app-debug.apk`.
-
-## Release deployment
-
-See [DEPLOYMENT.md](DEPLOYMENT.md) for keystore setup and the release checklist.
-
-## Project structure
-
-- `app/src/main/java`: Compose UI, ViewModel, tracker policies, and Room repository.
-- `app/src/test`: local JVM tests for parsing, validation, and calculations.
-
-`MainActivity` hosts the app and delegates document-picker handling to
-`CsvDocumentPickerCoordinator`. `TrackerViewModel` owns screen/import state;
-`ReadingRepository` and `RoomReadingRepository` provide committed snapshots and
-atomic mutations.
+For signing and publishing releases, see [DEPLOYMENT.md](DEPLOYMENT.md).

@@ -4,83 +4,65 @@ import androidx.room.Dao
 import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
-import androidx.room.PrimaryKey
 import androidx.room.Query
-import com.trackgas.app.data.StoredReadingDecodingException
+import androidx.room.withTransaction
 import com.trackgas.app.data.ReadingDatabase
-import java.math.BigDecimal
-import java.time.LocalDate
-import java.time.format.DateTimeParseException
+import com.trackgas.app.data.toReading
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 
-/** One durable Celsius value for a calendar day. */
-/** One durable Celsius value for a calendar day. */
-@Entity(tableName = "daily_temperatures")
-data class DailyTemperatureEntity(
-    @PrimaryKey val date: String,
+/** Only the completed mean and the exact inputs used to obtain it are durable. */
+@Entity(tableName = "interval_temperatures", primaryKeys = ["earlierId", "laterId"])
+data class IntervalTemperatureEntity(
+    val earlierId: String,
+    val laterId: String,
+    val installationId: String,
+    val startEpoch: Long,
+    val endEpoch: Long,
+    val location: String,
     val celsius: String,
 )
 
-/** Database operations for persisted daily temperature values. */
 @Dao
 interface TemperatureDao {
-    @Query("SELECT * FROM daily_temperatures ORDER BY date")
-    fun observeAll(): Flow<List<DailyTemperatureEntity>>
+    @Query("SELECT * FROM interval_temperatures")
+    fun observeAll(): Flow<List<IntervalTemperatureEntity>>
 
-    @Query("SELECT date FROM daily_temperatures")
-    suspend fun storedDates(): List<String>
+    @Query("SELECT * FROM interval_temperatures")
+    suspend fun getAll(): List<IntervalTemperatureEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(temperatures: List<DailyTemperatureEntity>)
+    suspend fun upsert(temperature: IntervalTemperatureEntity)
 
-    @Query("DELETE FROM daily_temperatures WHERE NOT EXISTS (SELECT 1 FROM readings) OR date < (SELECT MIN(date) FROM readings) OR date > (SELECT MAX(date) FROM readings)")
-    suspend fun pruneOutsideReadingRange()
+    @Query("""DELETE FROM interval_temperatures WHERE NOT EXISTS (
+        SELECT 1 FROM readings a JOIN readings b ON a.installationId = b.installationId
+        WHERE a.id = earlierId AND b.id = laterId
+        AND a.installationId = interval_temperatures.installationId
+        AND a.observedAt = startEpoch AND b.observedAt = endEpoch AND a.date < b.date
+        AND NOT EXISTS (SELECT 1 FROM readings c WHERE c.installationId = a.installationId
+            AND c.date > a.date AND c.date < b.date))""")
+    suspend fun pruneObsoleteIntervals()
 
-    @Query("DELETE FROM daily_temperatures")
+    @Query("DELETE FROM interval_temperatures")
     suspend fun deleteAll()
 }
 
-/** Exposes cached daily temperatures without coupling presentation to Room. */
-/** Exposes cached daily temperatures without coupling presentation to Room. */
 interface TemperatureRepository {
-    fun observe(): Flow<Map<LocalDate, BigDecimal>>
-    suspend fun storedDates(): Set<LocalDate>
-    suspend fun upsert(temperatures: Map<LocalDate, BigDecimal>)
+    fun observe(): Flow<List<IntervalTemperatureEntity>>
+    suspend fun stored(): List<IntervalTemperatureEntity>
+    suspend fun storeIfCurrent(temperature: IntervalTemperatureEntity): Boolean
     suspend fun deleteAll()
 }
 
-/** Room-backed temperature storage; dates and decimal values retain exact text representations. */
-class RoomTemperatureRepository(private val dao: TemperatureDao) : TemperatureRepository {
-    constructor(database: ReadingDatabase) : this(database.temperatures())
-
-    override fun observe(): Flow<Map<LocalDate, BigDecimal>> =
-        dao.observeAll().map { rows -> rows.associate { it.toTemperature() } }
-
-    override suspend fun storedDates(): Set<LocalDate> = dao.storedDates().mapTo(mutableSetOf(), ::storedDate)
-
-    override suspend fun upsert(temperatures: Map<LocalDate, BigDecimal>) {
-        if (temperatures.isEmpty()) return
-        dao.upsert(temperatures.map { (date, value) ->
-            DailyTemperatureEntity(date.toString(), value.toString())
-        })
+class RoomTemperatureRepository(private val database: ReadingDatabase) : TemperatureRepository {
+    private val dao = database.temperatures()
+    override fun observe() = dao.observeAll()
+    override suspend fun stored() = dao.getAll()
+    override suspend fun storeIfCurrent(temperature: IntervalTemperatureEntity): Boolean = database.withTransaction {
+        val intervals = readingIntervals(database.readings().getAll().map { it.toReading() })
+        if (intervals.none { it.matches(temperature) }) return@withTransaction false
+        java.math.BigDecimal(temperature.celsius)
+        dao.upsert(temperature)
+        true
     }
-
     override suspend fun deleteAll() = dao.deleteAll()
-
-    private fun DailyTemperatureEntity.toTemperature(): Pair<LocalDate, BigDecimal> {
-        val date = storedDate(date)
-        val value = try {
-            BigDecimal(celsius)
-        } catch (error: NumberFormatException) {
-            throw StoredReadingDecodingException(error)
-        }
-        return date to value
-    }
-
-    private fun storedDate(value: String): LocalDate = try {
-        LocalDate.parse(value)
-    } catch (error: DateTimeParseException) {
-        throw StoredReadingDecodingException(error)
-    }
 }

@@ -1,7 +1,13 @@
 package com.trackgas.app.tracking
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DatePicker
@@ -9,9 +15,13 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerLayoutType
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -19,13 +29,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.trackgas.app.R
 import java.time.LocalDate
+import java.time.LocalTime
 import java.util.Locale
 
 /**
@@ -50,7 +65,7 @@ internal fun ReadingForm(
     loadState: ReadingLoadState,
     onRetryLoad: () -> Unit,
     onClearError: () -> Unit,
-    onSave: (LocalDate?, String, String?) -> Unit,
+    onSave: (LocalDate?, String, String?, String, java.time.ZoneId) -> Unit,
     onDismiss: () -> Unit,
     tracker: TrackerData = TrackerData(readings),
 ) {
@@ -59,14 +74,23 @@ internal fun ReadingForm(
         is ReadingTarget.Add -> target.openingDate
         is ReadingTarget.Edit -> target.reading.date
     }
+    val zone = when (val target = dialog.target) {
+        is ReadingTarget.Add -> target.zone
+        is ReadingTarget.Edit -> target.reading.zone
+    }
+    val initialTime = when (val target = dialog.target) {
+        is ReadingTarget.Add -> target.observedAt.atZone(zone).toLocalTime()
+        is ReadingTarget.Edit -> target.reading.localTime
+    }
     fun newDraft() = ReadingDraft(sessionId, dialog.dialogId, initialDate.toString(), reading?.let {
         numberText(it.cubicMetres, locale, raw = true)
-    } ?: "", reading?.note.orEmpty())
+    } ?: "", reading?.note.orEmpty(), time = initialTime.toString(), timezone = zone.id)
     var restoredDraft by rememberSaveable(stateSaver = ReadingDraft.saver) { mutableStateOf(newDraft()) }
     // rememberSaveable inputs alone do not validate identities restored from a saved registry.
     if (!restoredDraft.matches(sessionId, dialog.dialogId)) restoredDraft = newDraft()
     val draft = restoredDraft
     val date = draft.date
+    val selectedTime = LocalTime.parse(draft.time)
     val pending = dialog.pending
     val errors = when (val phase = dialog.phase) {
         is SavePhase.Invalid -> phase.errors
@@ -78,6 +102,9 @@ internal fun ReadingForm(
         editing = reading != null,
         displayedDate = dateText(reading?.date ?: date, locale),
         value = draft.value,
+        displayedTime = timeText(selectedTime, locale),
+        timezone = draft.timezone,
+        onChooseTime = { draft.choosingTime = true },
         note = draft.note,
         errors = errors.copy(date = errors.date.takeUnless { duplicate }),
         pending = pending,
@@ -89,7 +116,8 @@ internal fun ReadingForm(
         onRetryLoad = onRetryLoad,
         onSave = {
             draft.duplicateDismissed = false
-            onSave(reading?.date ?: date, draft.value, reading?.let { draft.note.takeUnless(String::isBlank) })
+            onSave(reading?.date ?: date, draft.value, reading?.let { draft.note.takeUnless(String::isBlank) },
+                draft.time, java.time.ZoneId.of(draft.timezone))
         },
         onDismiss = onDismiss,
     )
@@ -104,6 +132,61 @@ internal fun ReadingForm(
                 draft.duplicateDismissed = true
             },
         )
+    }
+    if (draft.choosingTime) {
+        ReadingTimePicker(
+            time = selectedTime,
+            onDismiss = { draft.choosingTime = false },
+            onConfirm = {
+                draft.time = it.toString()
+                draft.choosingTime = false
+                onClearError()
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun ReadingTimePicker(
+    time: LocalTime,
+    onDismiss: () -> Unit,
+    onConfirm: (LocalTime) -> Unit,
+) {
+    val picker = rememberTimePickerState(initialHour = time.hour, initialMinute = time.minute, is24Hour = true)
+    val configuration = LocalConfiguration.current
+    val horizontal = configuration.screenHeightDp < 480 && configuration.screenWidthDp >= 600
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.safeDrawingPadding().padding(16.dp).widthIn(max = 560.dp).fillMaxWidth(),
+            shape = MaterialTheme.shapes.extraLarge,
+            tonalElevation = 6.dp,
+        ) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text(
+                    stringResource(R.string.observation_time),
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                TimePicker(
+                    state = picker,
+                    layoutType = if (horizontal) TimePickerLayoutType.Horizontal else TimePickerLayoutType.Vertical,
+                )
+                FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+                    TextButton(onClick = { onConfirm(LocalTime.of(picker.hour, picker.minute)) }) {
+                        Text(stringResource(R.string.ok))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -171,4 +254,8 @@ internal fun errorResource(error: ReadingError): Int = when (error) {
     ReadingError.BELOW_PREVIOUS -> R.string.below_previous
     ReadingError.ABOVE_NEXT -> R.string.above_next
     ReadingError.MISSING_READING -> R.string.reading_missing
+    ReadingError.TIME_REQUIRED -> R.string.time_required
+    ReadingError.INVALID_TIME -> R.string.invalid_time
+    ReadingError.FUTURE_TIME -> R.string.future_time
+    ReadingError.TIME_ORDER -> R.string.time_order
 }

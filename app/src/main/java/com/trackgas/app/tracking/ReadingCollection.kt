@@ -1,7 +1,7 @@
 package com.trackgas.app.tracking
 
 internal enum class ReadingCollectionViolation {
-    DUPLICATE_IDENTITY, DUPLICATE_DATE, DECREASING_VALUE, INVALID_INSTALLATION, OVERLAPPING_COVERAGE,
+    DUPLICATE_IDENTITY, DUPLICATE_DATE, DECREASING_VALUE, INVALID_INSTALLATION, OVERLAPPING_COVERAGE, TIMESTAMP_ORDER,
 }
 
 /** Checks relationships only; each [Reading] already enforces its intrinsic invariants. */
@@ -15,6 +15,7 @@ internal fun readingCollectionViolation(readings: List<Reading>): ReadingCollect
             val earlier = chronological[index - 1]
             val later = chronological[index]
             if (earlier.date == later.date) return ReadingCollectionViolation.DUPLICATE_DATE
+            if (earlier.observedAt >= later.observedAt) return ReadingCollectionViolation.TIMESTAMP_ORDER
             if (earlier.cubicMetres > later.cubicMetres) return ReadingCollectionViolation.DECREASING_VALUE
         }
     }

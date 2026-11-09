@@ -21,6 +21,7 @@ import com.trackgas.app.temperature.LocationResolver
 import com.trackgas.app.temperature.NetworkMonitor
 import com.trackgas.app.temperature.TemperatureRepository
 import com.trackgas.app.temperature.TemperatureServices
+import com.trackgas.app.temperature.TemperatureCoordinator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -49,6 +50,7 @@ class TrackGasApplication : Application() {
     val meterLocationStore: MeterLocationStore by lazy { SharedPreferencesMeterLocationStore(this) }
     val locationResolver: LocationResolver by lazy { OpenMeteoGeocoder() }
     val networkMonitor: NetworkMonitor by lazy { ConnectivityNetworkMonitor(this) }
+    private val temperatureCoordinator by lazy { TemperatureCoordinator(meterLocationStore, temperatureRepository) }
     val temperatureSync: TemperatureSync by lazy {
         TemperatureSync(
             readingRepository,
@@ -57,6 +59,7 @@ class TrackGasApplication : Application() {
             networkMonitor,
             OpenMeteoTemperatureProvider(),
             applicationScope,
+            coordinator = temperatureCoordinator,
         )
     }
     val temperatureServices: TemperatureServices by lazy {
@@ -66,6 +69,7 @@ class TrackGasApplication : Application() {
             networkMonitor,
             temperatureRepository,
             temperatureSync,
+            temperatureCoordinator,
         )
     }
 }

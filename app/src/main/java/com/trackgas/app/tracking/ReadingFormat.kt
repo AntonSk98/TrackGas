@@ -4,13 +4,22 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.NumberFormat
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
 
+internal fun readingDateTimeText(reading: Reading, locale: Locale): String =
+    reading.observedAt.atZone(reading.zone).format(
+        DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT).withLocale(locale),
+    )
+
 /** Full date context for history and the reading form. */
 internal fun dateText(date: LocalDate, locale: Locale): String =
     date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale))
+
+internal fun timeText(time: LocalTime, locale: Locale): String =
+    time.format(DateTimeFormatter.ofPattern("HH:mm", locale))
 
 internal fun bucketText(
     date: LocalDate,

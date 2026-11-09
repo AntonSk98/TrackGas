@@ -9,7 +9,8 @@ class MeterReplacementPolicyTest {
     private val date = LocalDate.of(2026, 10, 28)
     private val final = Reading("final", date, "1105.0000".toBigDecimal())
     private val tracker = TrackerData(
-        listOf(final.copy(id = "previous", date = date.minusDays(1), cubicMetres = "1100".toBigDecimal()), final),
+        listOf(final.copy(id = "previous", date = date.minusDays(1),
+            observedAt = final.observedAt.minusSeconds(86400), cubicMetres = "1100".toBigDecimal()), final),
     )
 
     private fun replace(
@@ -41,7 +42,8 @@ class MeterReplacementPolicyTest {
             ReplacementValidation.Rejected(ReplacementError.STALE_DATE),
             replace(today = date.plusDays(1)),
         )
-        val laterReading = tracker.copy(readings = tracker.readings + final.copy(id = "future", date = date.plusDays(1)))
+        val laterReading = tracker.copy(readings = tracker.readings + final.copy(id = "future",
+            date = date.plusDays(1), observedAt = final.observedAt.plusSeconds(86400)))
         assertEquals(ReplacementValidation.Rejected(ReplacementError.NOT_LATEST), replace(laterReading))
     }
 

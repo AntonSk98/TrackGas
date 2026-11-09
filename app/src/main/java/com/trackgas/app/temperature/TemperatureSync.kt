@@ -1,7 +1,6 @@
 package com.trackgas.app.temperature
 
 import com.trackgas.app.tracking.ReadingRepository
-import java.util.concurrent.atomic.AtomicLong
 import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -11,12 +10,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 /** Requests best-effort backfills and invalidates cached temperatures when the location changes. */
 interface TemperatureCheckRequester {
     fun requestCheck()
 
-    fun requestLocationRefresh()
 }
 
 /** Conflates app and connectivity events into best-effort, batched temperature backfills. */
@@ -28,13 +27,12 @@ class TemperatureSync(
     private val provider: TemperatureProvider,
     scope: CoroutineScope,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val coordinator: TemperatureCoordinator = TemperatureCoordinator(locationStore, temperatureStore),
 ) : TemperatureCheckRequester {
     private val checks = MutableSharedFlow<Unit>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
-    private val requestedLocationVersion = AtomicLong(0)
-    private var clearedLocationVersion = 0L
     private val networkRegistration = networkMonitor.addOnAvailableListener(::requestCheck)
     private val worker = scope.launch(dispatcher, start = CoroutineStart.UNDISPATCHED) {
         checks.collect { checkNow() }
@@ -44,26 +42,23 @@ class TemperatureSync(
         checks.tryEmit(Unit)
     }
 
-    override fun requestLocationRefresh() {
-        requestedLocationVersion.incrementAndGet()
-        requestCheck()
-    }
-
     private suspend fun checkNow() {
         bestEffort("Temperature check failed") {
-            val locationVersion = requestedLocationVersion.get()
-            if (locationVersion > clearedLocationVersion) {
-                temperatureStore.deleteAll()
-                clearedLocationVersion = locationVersion
-            }
             if (!networkMonitor.isOnline()) return@bestEffort
-            val location = locationStore.read() ?: return@bestEffort
-            if (readings.readingCount() < MINIMUM_READINGS) return@bestEffort
-            val range = readings.readingDateRange() ?: return@bestEffort
-            for (gap in missingRanges(range, temperatureStore.storedDates())) {
+            val captured = coordinator.location.value
+            if (!captured.cacheReady) return@bestEffort
+            val location = captured.location ?: return@bestEffort
+            val tracker = readings.observeReadings().first().tracker
+            for (interval in missingIntervals(tracker.readings, temperatureStore.stored(), location.fingerprint())) {
                 // A failed gap stays missing and is retried by a later check.
                 bestEffort("Open-Meteo temperature request failed") {
-                    temperatureStore.upsert(provider.fetch(location, gap.start, gap.endInclusive))
+                    val mean = provider.fetchIntervalTemperatureMean(location, interval)
+                    if (mean != null) {
+                        coordinator.publish(captured, IntervalTemperatureEntity(
+                            interval.earlier.id, interval.later.id, interval.earlier.installationId,
+                            interval.start.epochSecond, interval.end.epochSecond, location.fingerprint(), mean.toString(),
+                        ))
+                    }
                 }
             }
         }
@@ -85,7 +80,6 @@ class TemperatureSync(
     }
 
     private companion object {
-        const val MINIMUM_READINGS = 2
         val logger: Logger = Logger.getLogger(TemperatureSync::class.java.name)
     }
 }

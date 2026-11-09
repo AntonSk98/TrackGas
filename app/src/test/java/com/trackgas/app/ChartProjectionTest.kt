@@ -407,7 +407,8 @@ class ChartProjectionTest {
         assertEquals(listOf(27), before.entries.map { it.offset })
         assertEquals(listOf(BigDecimal("15.0000")), before.entries.map { it.cubicMetres })
         val initial = source.readings.single { it.id == "new-initial" }
-        val tracker = source.copy(readings = source.readings + initial.copy(id = "zero-next", date = initial.date.plusDays(1)))
+        val tracker = source.copy(readings = source.readings + initial.copy(id = "zero-next",
+            date = initial.date.plusDays(1), observedAt = initial.observedAt.plusSeconds(86400)))
         val after = chartProjection(october, dashboard(tracker, october))
         assertEquals(listOf(27, 28), after.entries.map { it.offset })
         assertTrue(after.entries.last().isZero)
@@ -420,7 +421,7 @@ class ChartProjectionTest {
         val source = replacementTracker("2026-10-04", "11.0000")
         val tracker = source.copy(readings = source.readings.map {
             when (it.id) {
-                "old-first" -> it.copy(date = LocalDate.parse("2026-10-01"))
+                "old-first" -> it.copy(date = LocalDate.parse("2026-10-01"), observedAt = java.time.Instant.parse("2026-10-01T08:00:00Z"))
                 "old-final" -> it.copy(cubicMetres = BigDecimal("1101.0000"))
                 else -> it
             }

@@ -35,7 +35,7 @@ class ReadingCollectionTest {
     }
 
     @Test fun rejectsDuplicateDatesAndDecreasingCumulativeValuesWithinOneInstallation() {
-        val duplicateDates = listOf(last, middle.copy(date = first.date), first)
+        val duplicateDates = listOf(last, middle.copy(date = first.date, observedAt = first.observedAt), first)
         assertEquals(ReadingCollectionViolation.DUPLICATE_DATE, readingCollectionViolation(duplicateDates))
         assertThrows(IllegalArgumentException::class.java) { readingIntervals(duplicateDates) }
 
@@ -91,7 +91,8 @@ class ReadingCollectionTest {
         val newMeter = MeterInstallation("new", last.date.plusDays(1))
         val tracker = TrackerData(listOf(first, last), listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), newMeter))
         assertEquals(newMeter, tracker.currentInstallation)
-        val futureReading = last.copy(id = "future", date = newMeter.startDate!!.plusDays(1))
+        val futureReading = last.copy(id = "future", date = newMeter.startDate!!.plusDays(1),
+            observedAt = last.observedAt.plusSeconds(2 * 86400))
         assertEquals(ORIGINAL_INSTALLATION_ID, tracker.copy(readings = tracker.readings + futureReading).currentInstallation.id)
     }
 }

@@ -8,6 +8,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.trackgas.app.temperature.MeterLocation
 import com.trackgas.app.temperature.TemperatureServices
+import com.trackgas.app.temperature.IntervalTemperatureEntity
+import com.trackgas.app.temperature.TemperatureAggregation
+import java.time.Instant
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import com.trackgas.app.reminders.ReminderScheduler
 import com.trackgas.app.reminders.ReminderStore
 import java.io.OutputStream
@@ -69,6 +74,7 @@ sealed interface CsvImportState {
     data class Failed(val requestId: String, val error: CsvImportError, val stalePreview: Boolean = false) : CsvImportState
 }
 
+/** Values rendered by Dashboard, History, and their dialogs; not the database contents alone. */
 data class TrackerState(
     val readings: List<Reading>,
     val period: CalendarPeriod,
@@ -86,13 +92,24 @@ data class TrackerState(
     val csvImport: CsvImportState = CsvImportState.Idle,
 )
 
-/** Publishes projections only from committed repository snapshots. */
+/**
+ * Holds screen state and coordinates user actions for Dashboard and History.
+ * Screens render [state] and call actions such as [save], [delete], and [navigate].
+ * Repositories validate and persist changes; this class publishes their committed results
+ * together with the selected period, dialog state, and chart values.
+ *
+ * Reading times are passed through to storage. Cached interval temperatures are adapted
+ * to consumption dates here; weather requests run separately through [TemperatureServices].
+ * The ViewModel survives screen recreation, but durable data belongs to the repositories.
+ */
 class TrackerViewModel(
     private val repository: ReadingRepository,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val temperature: TemperatureServices? = null,
     private val reminderStore: ReminderStore? = null,
     private val reminderScheduler: ReminderScheduler? = null,
+    private val currentInstant: () -> Instant = { Instant.now() },
+    private val currentZone: () -> ZoneId = { ZoneId.systemDefault() },
     private val currentDate: () -> LocalDate = { LocalDate.now() },
 ) : ViewModel() {
     private val initialPeriod = CalendarPeriod.containing(PeriodType.WEEK, today())
@@ -102,10 +119,23 @@ class TrackerViewModel(
     private var suggestionJob: Job? = null
     private var observationGeneration = 0L
     private var acceptedRevision = Long.MIN_VALUE
+    private var intervalMeans: List<IntervalTemperatureEntity> = emptyList()
+    // Identifies the location revision these cached means belong to, not a reading revision.
+    private var intervalMeansGeneration: Long? = null
 
     init {
         observeReadings()
         observeTemperatures()
+        temperature?.let { services ->
+            viewModelScope.launch {
+                services.coordinator.location.collect {
+                    state = state.copy(meterLocation = it.location)
+                    project(state.tracker, state.period)
+                    refreshTemperatureSnapshot(services)
+                }
+            }
+            services.checks.requestCheck()
+        }
     }
 
     fun today(): LocalDate = currentDate()
@@ -292,12 +322,12 @@ class TrackerViewModel(
     }
 
     private fun observeTemperatures() {
-        val source = temperature?.temperatures ?: return
+        val services = temperature ?: return
         viewModelScope.launch {
             try {
-                source.observe().collect { temperatures ->
-                    state = state.copy(temperatures = temperatures.toMap())
-                    project(state.tracker, state.period)
+                services.temperatures.observe().collect {
+                    // Room emissions are invalidation signals; their payload may predate a location clear.
+                    refreshTemperatureSnapshot(services)
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -306,9 +336,30 @@ class TrackerViewModel(
                     .warning("Could not observe stored temperatures")
             }
         }
+
     }
 
-    fun openAdd() = open(ReadingDialog.Editing(newId(), ReadingTarget.Add(today())))
+    /** Reloads cached means without accepting a result captured before a location change. */
+    private suspend fun refreshTemperatureSnapshot(services: TemperatureServices) {
+        try {
+            val (captured, temperatures) = withContext(ioDispatcher) { services.coordinator.snapshot() }
+            if (captured != services.coordinator.location.value) return
+            intervalMeans = temperatures
+            intervalMeansGeneration = captured.generation
+            project(state.tracker, state.period)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            Logger.getLogger(TrackerViewModel::class.java.name).warning("Could not read stored temperatures")
+        }
+    }
+
+    /** Captures the initial observation time once, so an open form does not follow the clock. */
+    fun openAdd() {
+        val captured = currentInstant().truncatedTo(ChronoUnit.MINUTES)
+        val zone = currentZone()
+        open(ReadingDialog.Editing(newId(), ReadingTarget.Add(captured.atZone(zone).toLocalDate(), captured, zone)))
+    }
 
     fun openEdit(reading: Reading) = open(ReadingDialog.Editing(newId(), ReadingTarget.Edit(reading)))
 
@@ -366,11 +417,9 @@ class TrackerViewModel(
         viewModelScope.launch {
             try {
                 val services = requireNotNull(temperature) { "Temperature services are not configured" }
-                val previous = withContext(ioDispatcher) { services.locationStore.read() }
-                withContext(ioDispatcher) { services.locationStore.save(location) }
+                withContext(ioDispatcher) { services.coordinator.save(location) }
                 state = state.copy(meterLocation = location, locationDialog = MeterLocationDialog.Closed)
-                if (previous != location) services.checks.requestLocationRefresh()
-                else services.checks.requestCheck()
+                services.checks.requestCheck()
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
@@ -449,14 +498,15 @@ class TrackerViewModel(
         }
     }
 
-    fun save(date: LocalDate?, input: String, locale: Locale, note: String? = null) {
+    fun save(date: LocalDate?, input: String, locale: Locale, note: String? = null, time: String, zone: ZoneId) {
         val dialog = state.dialog as? ReadingDialog.Editing ?: return
         if (state.loadState != ReadingLoadState.READY || dialog.pending) return
         val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
         val meter = parseMeter(input, locale)
         val intent = when (val target = dialog.target) {
-            is ReadingTarget.Add -> SaveReadingIntent.Add(date, meter, today())
-            is ReadingTarget.Edit -> SaveReadingIntent.Edit(target.reading.id, meter, today(), note)
+            is ReadingTarget.Add -> SaveReadingIntent.Add(date, meter, currentInstant().atZone(zone).toLocalDate(), time, zone, currentInstant())
+            is ReadingTarget.Edit -> SaveReadingIntent.Edit(target.reading.id, meter,
+                currentInstant().atZone(target.reading.zone).toLocalDate(), note, time, currentInstant())
         }
         state = state.copy(dialog = dialog.copy(phase = SavePhase.Pending(request.requestId)))
         viewModelScope.launch {
@@ -567,11 +617,21 @@ class TrackerViewModel(
         project(snapshot.tracker, state.period)
     }
 
+    /**
+     * Rebuilds History ordering, gas buckets, and date-keyed temperatures from the same tracker.
+     * Location revision checks hide old weather immediately, even before cache clearing finishes.
+     */
     private fun project(tracker: TrackerData, period: CalendarPeriod) {
         val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
             .mapIndexed { index, installation -> installation.id to index }.toMap()
         val readings = tracker.readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { installations.getValue(it.installationId) })
-        state = state.copy(readings = readings, tracker = tracker, period = period, dashboard = dashboard(tracker, period))
+        val weatherLocation = temperature?.coordinator?.location?.value
+        val projected = TemperatureAggregation.temperaturesByConsumptionDate(
+            readings, intervalMeans,
+            weatherLocation?.takeIf { it.cacheReady && it.generation == intervalMeansGeneration }?.location,
+        )
+        state = state.copy(readings = readings, tracker = tracker, period = period,
+            dashboard = dashboard(tracker, period), temperatures = projected)
     }
 
     companion object {

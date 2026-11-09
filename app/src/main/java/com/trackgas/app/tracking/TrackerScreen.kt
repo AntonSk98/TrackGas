@@ -60,7 +60,7 @@ fun TrackerScreen(
     onOpenDelete: (Reading) -> Unit,
     onDismissDialog: () -> Unit,
     onClearDialogError: () -> Unit,
-    onSave: (LocalDate?, String, Locale, String?) -> Unit,
+    onSave: (LocalDate?, String, Locale, String?, String, java.time.ZoneId) -> Unit,
     onDelete: () -> Unit,
     onOpenReplacement: () -> Unit = {},
     onReplaceMeter: () -> Unit = {},
@@ -280,7 +280,7 @@ fun TrackerScreen(
                 loadState = state.loadState,
                 onRetryLoad = onRetryLoad,
                 onClearError = onClearDialogError,
-                onSave = { date, value, note -> onSave(date, value, locale, note) },
+                onSave = { date, value, note, time, zone -> onSave(date, value, locale, note, time, zone) },
                 onDismiss = onDismissDialog,
                 tracker = state.tracker,
             )

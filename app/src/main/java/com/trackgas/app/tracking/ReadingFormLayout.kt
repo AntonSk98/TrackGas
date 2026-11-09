@@ -46,6 +46,9 @@ internal fun ReadingFormLayout(
     editing: Boolean,
     displayedDate: String,
     value: String,
+    displayedTime: String,
+    timezone: String,
+    onChooseTime: () -> Unit,
     note: String,
     errors: ReadingErrors,
     pending: Boolean,
@@ -103,6 +106,30 @@ internal fun ReadingFormLayout(
                             }
                         }
                         errors.date?.let { DateError(it) }
+                        Column {
+                            Box {
+                                OutlinedTextField(
+                                    value = displayedTime,
+                                    onValueChange = {},
+                                    modifier = Modifier.fillMaxWidth().clearAndSetSemantics {},
+                                    enabled = !pending,
+                                    readOnly = true,
+                                    label = { Text(stringResource(R.string.observation_time)) },
+                                    singleLine = true,
+                                    isError = errors.time != null,
+                                )
+                                val label = stringResource(R.string.choose_time, displayedTime)
+                                Box(Modifier.matchParentSize()
+                                    .clickable(enabled = !pending, role = Role.Button, onClick = onChooseTime)
+                                    .semantics { contentDescription = label })
+                            }
+                            Text(
+                                timezone,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(start = 16.dp, top = 4.dp),
+                            )
+                            errors.time?.let { DateError(it) }
+                        }
                         OutlinedTextField(
                             value = value,
                             onValueChange = onValueChange,

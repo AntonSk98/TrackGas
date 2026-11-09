@@ -46,6 +46,32 @@ class TrackerViewModelTest {
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
     @After fun tearDown() = Dispatchers.resetMain()
 
+    @Test fun addCapturesMinuteAndCurrentZoneOnceAndEditKeepsRecordedIdentity() = runTest {
+        var instant = java.time.Instant.parse("2026-11-06T07:15:47Z")
+        var zone = java.time.ZoneId.of("Europe/Berlin")
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo, ioDispatcher = dispatcher,
+            currentInstant = { instant }, currentZone = { zone })
+        repo.deliver(emptyList()); runCurrent()
+        vm.openAdd()
+        val captured = (vm.state.dialog as ReadingDialog.Editing).target as ReadingTarget.Add
+        assertEquals(java.time.Instant.parse("2026-11-06T07:15:00Z"), captured.observedAt)
+        assertEquals(zone, captured.zone)
+        instant = instant.plusSeconds(3600)
+        zone = java.time.ZoneId.of("Pacific/Honolulu")
+        assertEquals(captured, (vm.state.dialog as ReadingDialog.Editing).target)
+        vm.dismissDialog(); vm.openAdd()
+        val next = (vm.state.dialog as ReadingDialog.Editing).target as ReadingTarget.Add
+        assertEquals(zone, next.zone)
+        assertEquals(LocalDate.parse("2026-11-05"), next.openingDate)
+        vm.dismissDialog(); vm.openEdit(one)
+        vm.save(one.date.plusDays(2), "100.0001", Locale.US, time = "20:15", zone = zone)
+        runCurrent()
+        val edit = repo.saves.single() as SaveReadingIntent.Edit
+        assertEquals(one.id, edit.id)
+        assertEquals("20:15", edit.time)
+    }
+
     @Test fun exportRetainsFrozenCommittedSnapshotAndRejectsStaleRequests() = runTest {
         val repo = ScriptedReadingRepository()
         val store = ViewModelStore()
@@ -98,7 +124,7 @@ class TrackerViewModelTest {
         val imported = Reading("imported", today.minusDays(1), "100.2500".toBigDecimal(), meterId)
         val preview = CsvImportPreview(
             "preview", 1, listOf(CsvImportMeterChange(meterId, 0, 1)), 0, base,
-            listOf(CsvReadingRow(meterId, imported.date, imported.cubicMetres, 2)),
+            listOf(testCsvRow(meterId, imported.date, imported.cubicMetres, 2)),
         )
         val repo = ScriptedReadingRepository()
         val vm = TrackerViewModel(repo, ioDispatcher = dispatcher) { today }
@@ -161,9 +187,9 @@ class TrackerViewModelTest {
                     override fun addOnAvailableListener(listener: () -> Unit) = AutoCloseable {}
                 },
                 temperatures = object : TemperatureRepository {
-                    override fun observe() = emptyFlow<Map<LocalDate, java.math.BigDecimal>>()
-                    override suspend fun storedDates() = emptySet<LocalDate>()
-                    override suspend fun upsert(temperatures: Map<LocalDate, java.math.BigDecimal>) = Unit
+                    override fun observe() = emptyFlow<List<com.trackgas.app.temperature.IntervalTemperatureEntity>>()
+                    override suspend fun stored() = emptyList<com.trackgas.app.temperature.IntervalTemperatureEntity>()
+                    override suspend fun storeIfCurrent(temperature: com.trackgas.app.temperature.IntervalTemperatureEntity) = true
                     override suspend fun deleteAll() = Unit
                 },
                 checks = checks,
@@ -179,7 +205,7 @@ class TrackerViewModelTest {
         )))))
         vm.save(today, "112.1250", Locale.US)
         runCurrent()
-        assertEquals(1, checks.requests)
+        assertEquals(2, checks.requests)
         assertNotNull(reminderStore.lastSubmissionMillis())
         assertEquals(1, reminderScheduler.schedules)
 
@@ -190,7 +216,7 @@ class TrackerViewModelTest {
         vm.openDelete(added)
         vm.delete()
         runCurrent()
-        assertEquals(2, checks.requests)
+        assertEquals(3, checks.requests)
 
         val preview = CsvImportPreview(
             "temperature-check-import",
@@ -198,7 +224,7 @@ class TrackerViewModelTest {
             listOf(CsvImportMeterChange(meterId, 1, 1)),
             0,
             original,
-            listOf(CsvReadingRow(meterId, today.minusDays(2), "99".toBigDecimal(), 2)),
+            listOf(testCsvRow(meterId, today.minusDays(2), "99".toBigDecimal(), 2)),
         )
         repo.csvCommitOutcomes.send(Result.success(CsvImportCommitResult.Committed(
             CommittedSnapshot(4, original),
@@ -213,7 +239,7 @@ class TrackerViewModelTest {
         runCurrent()
         vm.confirmCsvImport()
         runCurrent()
-        assertEquals(3, checks.requests)
+        assertEquals(4, checks.requests)
         assertEquals(2, reminderScheduler.schedules)
     }
 
@@ -252,7 +278,7 @@ class TrackerViewModelTest {
 
     @Test fun transitionIdentityRejectsStaleSessionDialogRequestAndWrongAction() {
         val request = ReadingRequest("session", "dialog", "request")
-        val editing = ReadingDialog.Editing("dialog", ReadingTarget.Add(today), SavePhase.Pending("request"))
+        val editing = ReadingDialog.Editing("dialog", testAddTarget(today), SavePhase.Pending("request"))
         assertEquals(ReadingDialog.Closed, editing.completeSave(request, "session", null))
         for (stale in listOf(request.copy(sessionId = "old"), request.copy(dialogId = "old"), request.copy(requestId = "old"))) {
             assertSame(editing, editing.completeSave(stale, "session", SavePhase.Invalid(ReadingErrors(value = ReadingError.INVALID_NUMBER))))
@@ -413,7 +439,8 @@ class TrackerViewModelTest {
         repo.deliver(listOf(one))
         runCurrent()
         vm.openAdd()
-        assertEquals(ReadingTarget.Add(today), (vm.state.dialog as ReadingDialog.Editing).target)
+        val target = (vm.state.dialog as ReadingDialog.Editing).target as ReadingTarget.Add
+        assertEquals(target.observedAt.atZone(target.zone).toLocalDate(), target.openingDate)
     }
 
     @Test fun dialogsAreExclusiveErrorsBelongToTheirTargetAndOpeningResetsThem() = runTest {
@@ -484,7 +511,7 @@ class TrackerViewModelTest {
     }
 
     @Test fun failedAddEditDeleteRetainTargetProjectionAndCanRetry() = runTest {
-        for (target in listOf<ReadingTarget>(ReadingTarget.Add(today), ReadingTarget.Edit(two))) {
+        for (target in listOf<ReadingTarget>(testAddTarget(today), ReadingTarget.Edit(two))) {
             val repo = ScriptedReadingRepository()
             val vm = TrackerViewModel(repo) { today }
             repo.deliver(listOf(two, one)); runCurrent()
@@ -594,11 +621,14 @@ class TrackerViewModelTest {
     @Test fun dateProviderIsCapturedForOpeningButReevaluatedAtSubmissionAndPeriodSelection() = runTest {
         var date = LocalDate.parse("2026-10-31")
         val repo = ScriptedReadingRepository()
-        val vm = TrackerViewModel(repo) { date }
+        val vm = TrackerViewModel(repo,
+            currentInstant = { date.atTime(12, 0).toInstant(java.time.ZoneOffset.UTC) },
+            currentZone = { java.time.ZoneOffset.UTC },
+            currentDate = { date })
         repo.deliver(emptyList()); runCurrent()
         vm.openAdd()
         date = date.plusDays(1)
-        assertEquals(ReadingTarget.Add(date.minusDays(1)), (vm.state.dialog as ReadingDialog.Editing).target)
+        assertEquals(date.minusDays(1), ((vm.state.dialog as ReadingDialog.Editing).target as ReadingTarget.Add).openingDate)
         vm.selectPeriod(PeriodType.MONTH)
         assertEquals(date, vm.state.period.start)
         vm.save(date, "100.0100", Locale.GERMANY); runCurrent()
@@ -817,7 +847,7 @@ class TrackerViewModelTest {
         }
         assertSame(dialog, dialog.completeSave(request, "session", null))
         assertSame(dialog, dialog.completeDelete(request, "session", null))
-        val editing = ReadingDialog.Editing("dialog", ReadingTarget.Add(today), SavePhase.Pending("request"))
+        val editing = ReadingDialog.Editing("dialog", testAddTarget(today), SavePhase.Pending("request"))
         assertSame(editing, editing.completeReplacement(request, "session", null))
     }
 
@@ -990,7 +1020,6 @@ private class CountingCheckRequester : TemperatureCheckRequester {
     var requests = 0
     var locationRefreshes = 0
     override fun requestCheck() { requests++ }
-    override fun requestLocationRefresh() { locationRefreshes++ }
 }
 
 private class FakeReminderStore : ReminderStore {
