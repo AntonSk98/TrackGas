@@ -1,7 +1,6 @@
 package com.trackgas.app
 
 import android.app.Application
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.room.Room
 import com.trackgas.app.data.ReadingDatabase
 import com.trackgas.app.data.RoomReadingRepository
@@ -32,9 +31,6 @@ class TrackGasApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        if (AppCompatDelegate.getApplicationLocales().isEmpty) {
-            AppLanguages.select(AppLanguage.ENGLISH)
-        }
         temperatureSync.requestCheck()
     }
 

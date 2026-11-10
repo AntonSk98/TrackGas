@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -26,13 +27,15 @@ fun LanguageDialog(
     onDismiss: () -> Unit,
     onSelect: (AppLanguage) -> Unit,
 ) {
+    val locales = LocalConfiguration.current.locales
+    val currentLanguage = AppLanguages.current(List(locales.size()) { locales[it] })
     ResponsiveAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.language)) },
         text = {
             Column(Modifier.selectableGroup()) {
                 AppLanguage.entries.forEach { language ->
-                    val selected = language == AppLanguages.current()
+                    val selected = language == currentLanguage
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

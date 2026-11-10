@@ -2,6 +2,7 @@ package com.trackgas.app
 
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
+import java.util.Locale
 
 enum class AppLanguage(val localeTag: String, val labelRes: Int) {
     ENGLISH("en", R.string.language_english),
@@ -9,12 +10,10 @@ enum class AppLanguage(val localeTag: String, val labelRes: Int) {
 }
 
 object AppLanguages {
-    fun current(): AppLanguage {
-        val language = AppCompatDelegate.getApplicationLocales()
-            .get(0)
-            ?.language
-        return AppLanguage.entries.firstOrNull { it.localeTag == language } ?: AppLanguage.ENGLISH
-    }
+    fun current(locales: Iterable<Locale>): AppLanguage =
+        locales.firstNotNullOfOrNull { locale ->
+            AppLanguage.entries.firstOrNull { it.localeTag == locale.language }
+        } ?: AppLanguage.ENGLISH
 
     fun select(language: AppLanguage) {
         AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(language.localeTag))
