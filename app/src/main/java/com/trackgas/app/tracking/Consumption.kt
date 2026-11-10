@@ -6,6 +6,8 @@ import java.time.Duration
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
+enum class ConsumptionChartMode { DAILY_ESTIMATE, ABSOLUTE }
+
 /**
  * Measured difference between consecutive, validated cumulative readings.
  *
@@ -64,6 +66,21 @@ fun readingIntervals(tracker: TrackerData): List<ReadingInterval> {
 
 internal fun history24HourEstimates(tracker: TrackerData): Map<String, BigDecimal> =
     readingIntervals(tracker).associate { it.later.id to it.cubicMetresPer24Hours }
+
+/** Reuses observed interval rates only on covered dates inside the displayed period. */
+internal fun dailyConsumptionRates(tracker: TrackerData, period: CalendarPeriod): Map<LocalDate, BigDecimal> =
+    buildMap {
+        val range = period.range
+        for (interval in readingIntervals(tracker)) {
+            val start = maxOf(range.start, interval.firstCoveredDate)
+            val end = minOf(range.endInclusive, interval.lastCoveredDate)
+            if (end < start) continue
+            val rate = interval.cubicMetresPer24Hours
+            for (offset in 0 until ChronoUnit.DAYS.between(start, end) + 1) {
+                put(start.plusDays(offset), rate)
+            }
+        }
+    }
 
 private fun requireNonOverlapping(intervals: List<ReadingInterval>) {
     for (index in 1 until intervals.size) {

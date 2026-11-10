@@ -88,7 +88,15 @@
     <string name="deleting_reading">Zählerstand wird gelöscht…</string>
     <string name="retry">Versuch es erneut</string>
     <string name="no_consumption">Füge mindestens zwei Zählerstände hinzu, um den Verbrauch für diesen Zeitraum zu sehen.</string>
-    <string name="consumption_total">Verbrauch</string>
+    <string name="consumption_total">Gesamtverbrauch</string>
+    <string name="chart_daily_title">Tagesverbrauch</string>
+    <string name="chart_absolute_title">Verbrauch</string>
+    <string name="chart_mode_daily">Pro Tag</string>
+    <string name="chart_mode_absolute">Absolut</string>
+    <string name="chart_daily_volume">%1$s m³/Tag</string>
+    <string name="chart_daily_estimate">≈ %1$s m³</string>
+    <string name="chart_daily_estimate_description">Geschätzter Tagesverbrauch: %1$s Kubikmeter pro Tag</string>
+    <string name="chart_daily_unavailable">Tagesverbrauch nicht verfügbar</string>
     <string name="volume">%1$s m³</string>
     <string name="history_24h_estimate">≈ %1$s m³ / 24 h</string>
     <string name="history_24h_estimate_description">Geschätzter 24-Stunden-Verbrauch: %1$s Kubikmeter</string>

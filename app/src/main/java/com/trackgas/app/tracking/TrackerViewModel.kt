@@ -90,6 +90,7 @@ data class TrackerState(
     val tracker: TrackerData = TrackerData(readings),
     val export: ExportState = ExportState.Idle,
     val csvImport: CsvImportState = CsvImportState.Idle,
+    val chartMode: ConsumptionChartMode = ConsumptionChartMode.DAILY_ESTIMATE,
 )
 
 /**
@@ -142,6 +143,10 @@ class TrackerViewModel(
 
     fun selectTab(tab: TrackerTab) {
         state = state.copy(tab = tab)
+    }
+
+    fun selectChartMode(mode: ConsumptionChartMode) {
+        state = state.copy(chartMode = mode)
     }
 
     fun selectPeriod(type: PeriodType) = project(state.tracker, CalendarPeriod.containing(type, today()))

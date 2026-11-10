@@ -11,10 +11,10 @@ import com.trackgas.app.temperature.TemperatureAggregation
 internal data class ChartEntry(
     val range: DateRange,
     val offset: Int,
-    val cubicMetres: BigDecimal,
+    val value: BigDecimal,
     val normalizedY: Double,
 ) {
-    val isZero: Boolean get() = cubicMetres.signum() == 0
+    val isZero: Boolean get() = value.signum() == 0
 }
 
 internal data class ChartProjection(
@@ -23,8 +23,9 @@ internal data class ChartProjection(
     val scale: BigDecimal,
     val entries: List<ChartEntry>,
     val temperatures: List<TemperatureChartEntry> = emptyList(),
+    val mode: ConsumptionChartMode = ConsumptionChartMode.ABSOLUTE,
 ) {
-    fun cubicMetresAt(normalizedY: Double): BigDecimal {
+    fun amountAt(normalizedY: Double): BigDecimal {
         require(normalizedY.isFinite() && normalizedY in 0.0..1.0)
         return scale.multiply(BigDecimal.valueOf(normalizedY))
     }
@@ -34,6 +35,9 @@ internal data class TemperatureChartEntry(
     val offset: Int,
     val celsius: BigDecimal,
 )
+
+internal fun ChartProjection.temperatureOnly(): ChartProjection =
+    copy(scale = BigDecimal.ZERO, entries = emptyList(), mode = ConsumptionChartMode.ABSOLUTE)
 
 /** Groups covered daily Month buckets into clipped Monday–Sunday display rows. */
 internal fun weeklyRows(period: CalendarPeriod, buckets: List<ConsumptionBucket>): List<ConsumptionBucket> {
@@ -70,26 +74,41 @@ internal fun weeklyRows(period: CalendarPeriod, buckets: List<ConsumptionBucket>
     }
 }
 
-/** Copies covered buckets, never deriving consumption or a total from chart coordinates. */
+/** Selects chart-only values without changing absolute accounting or temperature coverage. */
 internal fun chartProjection(
     period: CalendarPeriod,
     dashboard: Dashboard,
     temperatures: Map<LocalDate, BigDecimal> = emptyMap(),
+    mode: ConsumptionChartMode = ConsumptionChartMode.ABSOLUTE,
+    dailyRates: Map<LocalDate, BigDecimal> = emptyMap(),
 ): ChartProjection {
     val buckets = dashboard.buckets.filter { it.amount.cubicMetres != null }.sortedBy { it.range.start }
-    val scale = buckets.maxOfOrNull { requireNotNull(it.amount.cubicMetres) } ?: BigDecimal.ZERO
+    val values = when (mode) {
+        ConsumptionChartMode.ABSOLUTE -> buckets.map { it.range to requireNotNull(it.amount.cubicMetres) }
+        ConsumptionChartMode.DAILY_ESTIMATE -> period.buckets().mapNotNull { range ->
+            val value = if (period.type == PeriodType.YEAR) {
+                TemperatureAggregation.mean(range.start..range.endInclusive, dailyRates)
+            } else {
+                dailyRates[range.start]
+            }
+            value?.let { range to it }
+        }
+    }
+    val scale = values.maxOfOrNull { it.second } ?: BigDecimal.ZERO
     val count = if (period.type == PeriodType.YEAR) 12 else period.range.days.toInt()
-    val entries = buckets.map { bucket ->
-        val value = requireNotNull(bucket.amount.cubicMetres)
+    fun offsetOf(range: DateRange): Int {
         val offset = (if (period.type == PeriodType.YEAR) ChronoUnit.MONTHS else ChronoUnit.DAYS)
-            .between(period.start, bucket.range.start).toInt()
-        require(offset in 0 until count && bucket.range.endInclusive <= period.range.endInclusive) {
+            .between(period.start, range.start).toInt()
+        require(offset in 0 until count && range.endInclusive <= period.range.endInclusive) {
             "Chart buckets must belong to the selected calendar period"
         }
+        return offset
+    }
+    val entries = values.map { (range, value) ->
         ChartEntry(
-            range = bucket.range,
-            offset = offset,
-            cubicMetres = value,
+            range = range,
+            offset = offsetOf(range),
+            value = value,
             normalizedY = if (value.signum() == 0) 0.0 else {
                 // Decimal normalization precedes the lossy graphics conversion. A positive
                 // amount that underflows Double is still not a genuine zero.
@@ -98,15 +117,16 @@ internal fun chartProjection(
             },
         )
     }
-    // Temperature is plotted only where a consumption bar exists, so both series share the same x positions.
-    val temperatureEntries = entries.mapNotNull { entry ->
+    // Keep absolute coverage even when opening-only consumption has no eligible gas rate.
+    val temperatureEntries = buckets.mapNotNull { bucket ->
+        val offset = offsetOf(bucket.range)
         val range = if (period.type == PeriodType.YEAR) {
-            val start = period.start.plusMonths(entry.offset.toLong())
+            val start = period.start.plusMonths(offset.toLong())
             start..start.plusMonths(1).minusDays(1)
         } else {
-            entry.range.start..entry.range.endInclusive
+            bucket.range.start..bucket.range.endInclusive
         }
-        TemperatureAggregation.mean(range, temperatures)?.let { TemperatureChartEntry(entry.offset, it) }
+        TemperatureAggregation.mean(range, temperatures)?.let { TemperatureChartEntry(offset, it) }
     }
-    return ChartProjection(period, count, scale, entries, temperatureEntries)
+    return ChartProjection(period, count, scale, entries, temperatureEntries, mode)
 }

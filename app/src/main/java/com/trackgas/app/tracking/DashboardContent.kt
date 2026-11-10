@@ -18,6 +18,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -25,7 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.trackgas.app.R
@@ -38,7 +41,7 @@ import java.util.Locale
  * Builds Dashboard's period controls, total, and covered weekly, daily, or monthly rows.
  *
  * [dashboard] already omits uncovered buckets. Calculation provenance and coverage
- * metadata intentionally remain hidden; chart and rows share the same covered values.
+ * metadata intentionally remain hidden; totals and rows stay absolute in either chart mode.
  * Period events are delegated to the host without deriving consumption during rendering.
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -47,6 +50,9 @@ internal fun LazyListScope.dashboardItems(
     dashboard: Dashboard,
     temperatures: Map<LocalDate, java.math.BigDecimal>,
     locale: Locale,
+    chartMode: ConsumptionChartMode,
+    dailyRates: Map<LocalDate, java.math.BigDecimal>,
+    onSelectChartMode: (ConsumptionChartMode) -> Unit,
     onSelectPeriod: (PeriodType) -> Unit,
     onNavigate: (Long) -> Unit,
 ) {
@@ -99,12 +105,40 @@ internal fun LazyListScope.dashboardItems(
                         style = MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            stringResource(chartMode.titleResource),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f).semantics { heading() },
+                        )
+                        val switchLabel = stringResource(R.string.chart_daily_title)
+                        val selectedMode = stringResource(chartMode.labelResource)
+                        Switch(
+                            checked = chartMode == ConsumptionChartMode.DAILY_ESTIMATE,
+                            onCheckedChange = { daily ->
+                                onSelectChartMode(
+                                    if (daily) ConsumptionChartMode.DAILY_ESTIMATE else ConsumptionChartMode.ABSOLUTE,
+                                )
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp).semantics {
+                                contentDescription = switchLabel
+                                stateDescription = selectedMode
+                            },
+                        )
+                    }
                     ConsumptionChart(
                         period,
                         dashboard,
                         temperatures,
                         locale,
                         TemperatureAggregation.mean(period, temperatures),
+                        chartMode,
+                        dailyRates,
                         Modifier.fillMaxWidth(),
                     )
                 }

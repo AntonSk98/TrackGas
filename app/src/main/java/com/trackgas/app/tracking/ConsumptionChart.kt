@@ -32,6 +32,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -94,11 +96,13 @@ internal fun ConsumptionChart(
     temperatures: Map<java.time.LocalDate, BigDecimal>,
     locale: Locale,
     averageTemperature: BigDecimal?,
+    mode: ConsumptionChartMode,
+    dailyRates: Map<java.time.LocalDate, BigDecimal>,
     modifier: Modifier = Modifier,
 ) {
-    val projection = chartProjection(period, dashboard, temperatures)
-    if (projection.entries.isEmpty()) return
-
+    val projection = remember(period, dashboard, temperatures, mode, dailyRates) {
+        chartProjection(period, dashboard, temperatures, mode, dailyRates)
+    }
     val colors = MaterialTheme.colorScheme
     ProvideVicoTheme(
         rememberM3VicoTheme(
@@ -107,35 +111,56 @@ internal fun ConsumptionChart(
             textColor = colors.onSurfaceVariant,
         ),
     ) {
-        // A snapshot owns its producer/host. While the new transaction is being collected,
-        // no frame may show an old model under the new dates or decimal scale.
-        key(projection) {
-            BoxWithConstraints(modifier.fillMaxWidth()) {
-                val label = rememberAxisLabelComponent(
-                    lineCount = 1,
-                    margins = insets(horizontal = 4.dp, vertical = 4.dp),
-                )
-                val presentation = rememberChartPresentation(projection, locale, maxWidth.value, label)
-                Column {
+        ProjectedCharts(projection, locale, averageTemperature, modifier)
+    }
+}
+
+@Composable
+private fun ProjectedCharts(
+    projection: ChartProjection,
+    locale: Locale,
+    averageTemperature: BigDecimal?,
+    modifier: Modifier,
+) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val label = rememberAxisLabelComponent(
+            lineCount = 1,
+            margins = insets(horizontal = 4.dp, vertical = 4.dp),
+        )
+        val presentation = rememberChartPresentation(projection, locale, maxWidth.value, label)
+        Column {
+            // A gas snapshot owns its model and scale; temperature does not depend on mode.
+            key(projection) {
+                if (projection.entries.isEmpty()) {
+                    Text(
+                        stringResource(R.string.chart_daily_unavailable),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
                     ProjectedConsumptionChart(projection, locale, presentation, label)
-                    if (projection.temperatures.isNotEmpty()) {
-                        averageTemperature?.let { mean ->
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    stringResource(R.string.temperature_title),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    stringResource(R.string.temperature, numberText(mean, locale)),
-                                    modifier = Modifier.padding(bottom = 4.dp),
-                                    style = MaterialTheme.typography.headlineLarge,
-                                    color = MaterialTheme.colorScheme.tertiary,
-                                )
-                            }
-                        }
-                        ProjectedTemperatureChart(projection, locale, presentation, label)
+                }
+            }
+            if (projection.temperatures.isNotEmpty()) {
+                averageTemperature?.let { mean ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            stringResource(R.string.temperature_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            stringResource(R.string.temperature, numberText(mean, locale)),
+                            modifier = Modifier.padding(bottom = 4.dp),
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
                     }
+                }
+                val temperatureProjection = projection.temperatureOnly()
+                key(temperatureProjection) {
+                    ProjectedTemperatureChart(temperatureProjection, locale, presentation, label)
                 }
             }
         }
@@ -162,7 +187,7 @@ private fun rememberChartPresentation(
         }
     }
     val resources = LocalContext.current.resources
-    val volumeTitle = stringResource(R.string.volume, "").trim()
+    val volumeTitle = stringResource(projection.mode.volumeResource, "").trim()
     val temperatureTitle = stringResource(R.string.temperature_axis, "").trim()
     return remember(projection, locale, width, label, context, resources, volumeTitle, temperatureTitle) {
         val dates = (0 until projection.positionCount).map { offset ->
@@ -269,7 +294,16 @@ private fun ProjectedConsumptionChart(
     val resources = LocalContext.current.resources
     val inspection = rememberInspection(projection, locale, MaterialTheme.colorScheme.primary) { offset ->
         projection.entries.firstOrNull { it.offset == offset }
-            ?.let { resources.getString(R.string.volume, numberText(it.cubicMetres, locale)) }
+            ?.let { resources.getString(projection.mode.inspectionResource, numberText(it.value, locale)) }
+    }
+    val description = remember(projection, locale, resources) {
+        projection.entries.joinToString("\n") { entry ->
+            resources.getString(
+                R.string.chart_marker,
+                bucketText(entry.range.start, projection.period.type, locale, padDay = true),
+                resources.getString(projection.mode.descriptionResource, numberText(entry.value, locale)),
+            )
+        }
     }
     val startAxis = VerticalAxis.rememberStart(
         valueFormatter = amountFormatter,
@@ -278,7 +312,7 @@ private fun ProjectedConsumptionChart(
         },
         label = label,
         size = BaseAxis.Size.Auto(layout.valueAxisWidth, layout.valueAxisWidth),
-        title = stringResource(R.string.volume, "").trim(),
+        title = stringResource(projection.mode.volumeResource, "").trim(),
         titleComponent = label,
         tick = null,
         tickLength = 0.dp,
@@ -315,7 +349,9 @@ private fun ProjectedConsumptionChart(
                 getXStep = { 1.0 },
             ),
             modelProducer = producer,
-            modifier = Modifier.fillMaxWidth().height(layout.consumptionHeight.dp).then(inspection.modifier),
+            modifier = Modifier.fillMaxWidth().height(layout.consumptionHeight.dp)
+                .semantics { contentDescription = description }
+                .then(inspection.modifier),
             scrollState = rememberVicoScrollState(scrollEnabled = false),
             zoomState = rememberVicoZoomState(
                 zoomEnabled = false,
@@ -567,13 +603,43 @@ private class BaselineZeroComponent(fill: Fill, thicknessDp: Float) : LineCompon
     }
 }
 
-/** Keep extreme axis labels compact; exact localized values remain in the caller's list. */
+/** Keep extreme axis labels compact; inspection retains the original decimal values. */
 internal fun chartAxisText(projection: ChartProjection, value: Double, locale: Locale): String =
-    chartAmountText(projection.cubicMetresAt(value.coerceIn(0.0, 1.0)), locale)
+    chartAmountText(projection.amountAt(value.coerceIn(0.0, 1.0)), locale)
 
 internal fun chartAmountText(value: BigDecimal, locale: Locale): String =
     if (value.signum() != 0 && (value.abs() >= BigDecimal("1000000") || value.abs() < BigDecimal("0.001"))) {
         DecimalFormat("0.##E0", DecimalFormatSymbols.getInstance(locale)).format(value)
     } else {
         numberText(value, locale)
+    }
+
+internal val ConsumptionChartMode.titleResource: Int
+    get() = when (this) {
+        ConsumptionChartMode.DAILY_ESTIMATE -> R.string.chart_daily_title
+        ConsumptionChartMode.ABSOLUTE -> R.string.chart_absolute_title
+    }
+
+internal val ConsumptionChartMode.labelResource: Int
+    get() = when (this) {
+        ConsumptionChartMode.DAILY_ESTIMATE -> R.string.chart_mode_daily
+        ConsumptionChartMode.ABSOLUTE -> R.string.chart_mode_absolute
+    }
+
+internal val ConsumptionChartMode.volumeResource: Int
+    get() = when (this) {
+        ConsumptionChartMode.DAILY_ESTIMATE -> R.string.chart_daily_volume
+        ConsumptionChartMode.ABSOLUTE -> R.string.volume
+    }
+
+internal val ConsumptionChartMode.inspectionResource: Int
+    get() = when (this) {
+        ConsumptionChartMode.DAILY_ESTIMATE -> R.string.chart_daily_estimate
+        ConsumptionChartMode.ABSOLUTE -> R.string.volume
+    }
+
+internal val ConsumptionChartMode.descriptionResource: Int
+    get() = when (this) {
+        ConsumptionChartMode.DAILY_ESTIMATE -> R.string.chart_daily_estimate_description
+        ConsumptionChartMode.ABSOLUTE -> R.string.volume
     }

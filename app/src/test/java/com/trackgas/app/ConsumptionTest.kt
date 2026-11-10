@@ -3,6 +3,8 @@ package com.trackgas.app
 import com.trackgas.app.tracking.*
 import java.math.BigDecimal
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -17,6 +19,10 @@ class ConsumptionTest {
         val period = CalendarPeriod(PeriodType.MONTH, original.first().date)
         assertEquals(dashboard(original, period), dashboard(changed, period))
         assertNotEquals(history24HourEstimates(TrackerData(original)), history24HourEstimates(TrackerData(changed)))
+        assertNotEquals(
+            dailyConsumptionRates(TrackerData(original), period),
+            dailyConsumptionRates(TrackerData(changed), period),
+        )
         val oldWeather = com.trackgas.app.temperature.readingIntervals(original).single()
         val newWeather = com.trackgas.app.temperature.readingIntervals(changed).single()
         assertNotEquals(oldWeather.start, newWeather.start)
@@ -25,6 +31,153 @@ class ConsumptionTest {
 
     private fun reading(day: Int, value: String) =
         Reading("id-$day", LocalDate.of(2026, 10, day), BigDecimal(value))
+
+    private fun observedReading(local: String, value: String, zone: String = "UTC"): Reading {
+        val timestamp = LocalDateTime.parse(local).atZone(ZoneId.of(zone))
+        return Reading(
+            id = local,
+            date = timestamp.toLocalDate(),
+            cubicMetres = BigDecimal(value),
+            observedAt = timestamp.toInstant(),
+            zone = timestamp.zone,
+        )
+    }
+
+    @Test fun dailyRateUsesActualElapsedSecondsWithoutChangingAbsoluteAllocation() {
+        val tracker = TrackerData(listOf(
+            observedReading("2026-11-06T08:00", "1000"),
+            observedReading("2026-11-07T23:00", "1013"),
+        ))
+        for (type in listOf(PeriodType.WEEK, PeriodType.MONTH)) {
+            val period = CalendarPeriod.containing(type, tracker.readings.last().date)
+            val before = dashboard(tracker, period)
+            val rates = dailyConsumptionRates(tracker, period)
+            assertEquals(mapOf(LocalDate.parse("2026-11-07") to BigDecimal("8")), rates)
+            assertEquals(BigDecimal("13"), before.total.cubicMetres)
+            assertEquals(BigDecimal("13"), before.buckets.single().amount.cubicMetres)
+            assertEquals(before, dashboard(tracker, period))
+        }
+    }
+
+    @Test fun fractionalShortDstAndDifferentZoneIntervalsReuseHistoryNormalization() {
+        val examples = listOf(
+            Triple(observedReading("2026-11-06T20:00", "100"),
+                observedReading("2026-11-07T06:30", "107"), "16"),
+            Triple(observedReading("2026-11-06T23:45", "100"),
+                observedReading("2026-11-07T00:15", "101"), "48"),
+            Triple(observedReading("2026-03-28T08:00", "100", "Europe/Berlin"),
+                observedReading("2026-03-29T08:00", "123", "Europe/Berlin"), "24"),
+            Triple(observedReading("2026-10-24T08:00", "100", "Europe/Berlin"),
+                observedReading("2026-10-25T08:00", "125", "Europe/Berlin"), "24"),
+            Triple(observedReading("2026-11-06T08:00", "100", "Europe/Berlin"),
+                observedReading("2026-11-07T08:00", "130", "America/New_York"), "24"),
+        )
+        for ((earlier, later, expected) in examples) {
+            val tracker = TrackerData(listOf(later, earlier))
+            val period = CalendarPeriod.containing(PeriodType.MONTH, later.date)
+            val rates = dailyConsumptionRates(tracker, period)
+            assertEquals(setOf(later.date), rates.keys)
+            assertEquals(0, BigDecimal(expected).compareTo(rates.getValue(later.date)))
+            assertEquals(history24HourEstimates(tracker).getValue(later.id), rates.getValue(later.date))
+            assertEquals(later.cubicMetres - earlier.cubicMetres, dashboard(tracker, period).total.cubicMetres)
+        }
+    }
+
+    @Test fun monthlyRateMeansWeightCoveredDatesRatherThanIntervalsOrCalendarLength() {
+        val tracker = TrackerData(listOf(reading(1, "100"), reading(4, "112"), reading(5, "120")))
+        val year = CalendarPeriod(PeriodType.YEAR, LocalDate.parse("2026-01-01"))
+        val rates = dailyConsumptionRates(tracker, year)
+        assertEquals(listOf(2, 3, 4, 5), rates.keys.map { it.dayOfMonth })
+        assertEquals(listOf("4", "4", "4", "8").map(::BigDecimal), rates.values.toList())
+        val entry = chartProjection(year, dashboard(tracker, year),
+            mode = ConsumptionChartMode.DAILY_ESTIMATE, dailyRates = rates).entries.single()
+        assertEquals(9, entry.offset)
+        assertEquals(BigDecimal("5"), entry.value)
+        assertEquals(BigDecimal("20"), dashboard(tracker, year).total.cubicMetres)
+
+        val partial = TrackerData(listOf(reading(10, "100"), reading(12, "112")))
+        val partialRates = dailyConsumptionRates(partial, year)
+        assertEquals(2, partialRates.size)
+        assertEquals(BigDecimal("6"), chartProjection(year, dashboard(partial, year),
+            mode = ConsumptionChartMode.DAILY_ESTIMATE, dailyRates = partialRates).entries.single().value)
+
+        val withZero = TrackerData(listOf(reading(10, "100"), reading(11, "100"), reading(12, "108")))
+        assertEquals(BigDecimal("4"), chartProjection(year, dashboard(withZero, year),
+            mode = ConsumptionChartMode.DAILY_ESTIMATE,
+            dailyRates = dailyConsumptionRates(withZero, year)).entries.single().value)
+    }
+
+    @Test fun ratesAndMonthlyMeansClipCrossMonthAndYearIntervalsToSelectedDates() {
+        val tracker = TrackerData(listOf(
+            observedReading("2025-12-30T08:00", "100"),
+            observedReading("2026-01-02T08:00", "112"),
+            observedReading("2026-02-02T08:00", "360"),
+        ))
+        val year = CalendarPeriod(PeriodType.YEAR, LocalDate.parse("2026-01-01"))
+        val rates = dailyConsumptionRates(tracker, year)
+        assertEquals(LocalDate.parse("2026-01-01"), rates.keys.first())
+        assertEquals(LocalDate.parse("2026-02-02"), rates.keys.last())
+        assertEquals(33, rates.size)
+        val entries = chartProjection(year, dashboard(tracker, year),
+            mode = ConsumptionChartMode.DAILY_ESTIMATE, dailyRates = rates).entries
+        val januaryMean = BigDecimal("240").divide(BigDecimal("31"), java.math.MathContext.DECIMAL128)
+        assertEquals(listOf(januaryMean, BigDecimal("8")), entries.map { it.value })
+        for ((date, size, expected) in listOf(
+            Triple("2025-12-01", 1, "4"),
+            Triple("2026-01-01", 31, null),
+            Triple("2026-02-01", 2, "8"),
+        )) {
+            val period = CalendarPeriod(PeriodType.MONTH, LocalDate.parse(date))
+            val clipped = dailyConsumptionRates(tracker, period)
+            assertEquals(size, clipped.size)
+            assertTrue(clipped.keys.all { it in period.range.start..period.range.endInclusive })
+            if (expected != null) assertTrue(clipped.values.all { it.compareTo(BigDecimal(expected)) == 0 })
+        }
+    }
+
+    @Test(timeout = 5000) fun hugeIntervalsEnumerateOnlyTheDisplayedPeriod() {
+        val tracker = TrackerData(listOf(
+            observedReading("-100000-01-01T08:00", "0"),
+            observedReading("+100000-01-01T08:00", "73048500"),
+        ))
+        for (type in PeriodType.entries) {
+            val period = CalendarPeriod.containing(type, LocalDate.parse("2024-02-15"))
+            val rates = dailyConsumptionRates(tracker, period)
+            assertEquals(period.range.days.toInt(), rates.size)
+            assertEquals(period.start, rates.keys.first())
+            assertEquals(period.range.endInclusive, rates.keys.last())
+            assertTrue(rates.values.all { it == readingIntervals(tracker).single().cubicMetresPer24Hours })
+        }
+    }
+
+    @Test fun dailyRatesExcludeBaselinesOpeningUsageAndGapsButKeepKnownZero() {
+        val period = CalendarPeriod(PeriodType.MONTH, LocalDate.parse("2026-10-01"))
+        for (tracker in listOf(TrackerData(), TrackerData(listOf(reading(1, "100"))))) {
+            assertTrue(dailyConsumptionRates(tracker, period).isEmpty())
+        }
+        val original = TrackerData(listOf(reading(1, "100"), reading(2, "100")))
+        val rates = dailyConsumptionRates(original, period)
+        assertEquals(mapOf(reading(2, "0").date to BigDecimal.ZERO), rates)
+        assertNull(rates[reading(1, "0").date])
+        assertNull(rates[reading(3, "0").date])
+
+        val replacement = replacementTracker("10", "13")
+        val independentRates = dailyConsumptionRates(replacement, period)
+        assertEquals(listOf(28, 30), independentRates.keys.map { it.dayOfMonth })
+        assertEquals(listOf(BigDecimal("5"), BigDecimal("3")), independentRates.values.toList())
+        assertTrue(dailyConsumptionRates(replacement, period.navigate(-1)).isEmpty())
+        val openingOnly = replacement.copy(readings = replacement.readings.filter { it.installationId == "new" }.take(1))
+        assertEquals(BigDecimal("10"), dashboard(openingOnly, period).total.cubicMetres)
+        assertTrue(dailyConsumptionRates(openingOnly, period).isEmpty())
+
+        val oldFinal = reading(29, "1105")
+        val mixed = replacement.copy(readings = replacement.readings.filterNot { it.id == "id-28" } + oldFinal)
+        val mixedRates = dailyConsumptionRates(mixed, period)
+        assertEquals(0, BigDecimal("2.5").compareTo(mixedRates.getValue(oldFinal.date)))
+        assertEquals(0, BigDecimal("12.5").compareTo(dashboard(mixed, period).buckets
+            .single { it.range.start == oldFinal.date }.amount.cubicMetres))
+        assertEquals(0, BigDecimal("3").compareTo(mixedRates.getValue(reading(30, "0").date)))
+    }
 
     @Test fun emptyAndBaselineHaveNoIntervals() {
         assertTrue(readingIntervals(emptyList()).isEmpty())
@@ -220,6 +373,9 @@ class ConsumptionTest {
             tracker.copy(readings = tracker.readings + reading(30, "1106")),
         )) {
             assertThrows(IllegalArgumentException::class.java) { readingIntervals(invalid) }
+            assertThrows(IllegalArgumentException::class.java) {
+                dailyConsumptionRates(invalid, CalendarPeriod(PeriodType.MONTH, LocalDate.of(2026, 1, 1)))
+            }
             assertThrows(IllegalArgumentException::class.java) {
                 dashboard(invalid, CalendarPeriod(PeriodType.MONTH, LocalDate.of(2026, 1, 1)))
             }

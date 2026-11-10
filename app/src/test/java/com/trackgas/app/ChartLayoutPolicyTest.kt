@@ -83,6 +83,19 @@ class ChartLayoutPolicyTest {
         assertTrue(policy.tickSpacing >= layout().tickSpacing)
     }
 
+    @Test fun longerDailyRateUnitTitlesFitWithoutChangingSharedDateGeometry() {
+        for (fontScale in listOf(1f, 1.5f, 2f)) {
+            val absolute = layout(titleLength = 32f * fontScale)
+            val rateTitleLength = 72f * fontScale
+            val daily = layout(titleLength = rateTitleLength)
+            assertEquals(absolute.valueAxisWidth, daily.valueAxisWidth, 0f)
+            assertEquals(absolute.edgePadding, daily.edgePadding, 0f)
+            assertEquals(absolute.tickSpacing, daily.tickSpacing)
+            assertTrue(daily.consumptionHeight - daily.topInset - daily.consumptionBottomInset >= rateTitleLength)
+            assertTrue(daily.temperatureHeight - daily.topInset - daily.temperatureBottomInset >= 56f)
+        }
+    }
+
     @Test fun crampedAndSinglePositionChartsStillHavePositiveBoundedSpacing() {
         assertEquals(31, layout(width = 0f).tickSpacing)
         assertEquals(1, layout(width = 0f, positions = 1).tickSpacing)

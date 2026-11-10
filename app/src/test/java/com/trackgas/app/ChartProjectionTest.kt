@@ -3,6 +3,7 @@ package com.trackgas.app
 import com.trackgas.app.tracking.CalendarPeriod
 import com.trackgas.app.tracking.ConsumptionAmount
 import com.trackgas.app.tracking.ConsumptionBucket
+import com.trackgas.app.tracking.ConsumptionChartMode
 import com.trackgas.app.tracking.Dashboard
 import com.trackgas.app.tracking.DateRange
 import com.trackgas.app.tracking.PeriodType
@@ -15,8 +16,10 @@ import com.trackgas.app.tracking.chartAmountText
 import com.trackgas.app.tracking.chartAxisText
 import com.trackgas.app.tracking.chartProjection
 import com.trackgas.app.tracking.temperatureSegments
+import com.trackgas.app.tracking.temperatureOnly
 import com.trackgas.app.tracking.TemperatureChartEntry
 import com.trackgas.app.tracking.dashboard
+import com.trackgas.app.tracking.dailyConsumptionRates
 import com.trackgas.app.tracking.weeklyRows
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -40,6 +43,160 @@ class ChartProjectionTest {
         buckets.toList(),
     )
 
+    @Test fun chartModeIsPartOfSnapshotIdentityEvenWhenEveryValueIsEqual() {
+        val tracker = TrackerData(listOf(reading("2026-10-01", "100"), reading("2026-10-02", "104")))
+        val data = dashboard(tracker, october)
+        val absolute = chartProjection(october, data)
+        val daily = chartProjection(october, data, mode = ConsumptionChartMode.DAILY_ESTIMATE,
+            dailyRates = dailyConsumptionRates(tracker, october))
+        assertEquals(ConsumptionChartMode.ABSOLUTE, absolute.mode)
+        assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, daily.mode)
+        assertEquals(absolute.entries, daily.entries)
+        assertEquals(absolute.scale, daily.scale)
+        assertEquals(absolute.temperatures, daily.temperatures)
+        assertNotEquals(absolute, daily)
+        assertEquals(absolute, daily.copy(mode = ConsumptionChartMode.ABSOLUTE))
+    }
+
+    @Test fun temperatureSnapshotIgnoresGasModeValuesAndScaleButTracksWeatherAndPeriod() {
+        val data = snapshot(bucket("2026-10-02", "13"))
+        val temperatures = mapOf(LocalDate.parse("2026-10-02") to BigDecimal("8"))
+        val absolute = chartProjection(october, data, temperatures)
+        val daily = chartProjection(october, data, temperatures, ConsumptionChartMode.DAILY_ESTIMATE,
+            mapOf(LocalDate.parse("2026-10-02") to BigDecimal("4")))
+        val temperature = absolute.temperatureOnly()
+        assertNotEquals(absolute, daily)
+        assertEquals(temperature, daily.temperatureOnly())
+        assertEquals(temperature, daily.copy(entries = emptyList(), scale = BigDecimal("99")).temperatureOnly())
+        assertEquals(absolute.temperatures, temperature.temperatures)
+        assertTrue(temperature.entries.isEmpty())
+        assertEquals(BigDecimal.ZERO, temperature.scale)
+        assertNotEquals(temperature, chartProjection(october, data,
+            mapOf(LocalDate.parse("2026-10-02") to BigDecimal("9"))).temperatureOnly())
+        assertNotEquals(temperature, temperature.copy(period = october.navigate(1)))
+    }
+
+    @Test fun dailyValuesChangeChartOnlyAndRetainAbsoluteRowsTotalsAndTemperaturePoints() {
+        val tracker = TrackerData(listOf(
+            reading("2026-10-01", "100"),
+            reading("2026-10-02", "113").copy(
+                observedAt = reading("2026-10-02", "113").observedAt.plusSeconds(15 * 3600)),
+            reading("2026-10-04", "118.5"),
+        ))
+        val temperatures = mapOf(
+            LocalDate.parse("2026-10-02") to BigDecimal("8"),
+            LocalDate.parse("2026-10-03") to BigDecimal("10"),
+            LocalDate.parse("2026-10-04") to BigDecimal("12"),
+        )
+        for (type in PeriodType.entries) {
+            val period = CalendarPeriod.containing(type, LocalDate.parse("2026-10-02"))
+            val data = dashboard(tracker, period)
+            val before = data.copy(buckets = data.buckets.toList())
+            val absolute = chartProjection(period, data, temperatures)
+            val rates = dailyConsumptionRates(tracker, period)
+            val daily = chartProjection(period, data, temperatures, ConsumptionChartMode.DAILY_ESTIMATE, rates)
+            assertEquals(before, data)
+            assertEquals(before, dashboard(tracker, period))
+            assertEquals(absolute.temperatures, daily.temperatures)
+            assertEquals(absolute.entries.map { it.offset }, daily.entries.map { it.offset })
+            assertEquals(absolute.positionCount, daily.positionCount)
+            if (type == PeriodType.YEAR) {
+                val expected = TemperatureAggregation.mean(period, rates)!!
+                assertEquals(expected, daily.entries.single().value)
+                assertEquals(BigDecimal("18.5"), absolute.entries.single().value)
+                assertEquals(BigDecimal("10"), daily.temperatures.single().celsius)
+            } else {
+                assertEquals(BigDecimal("8"), daily.entries.first().value)
+                assertEquals(BigDecimal("13"), absolute.entries.first().value)
+                assertEquals(BigDecimal("8"), daily.scale)
+                assertEquals(BigDecimal("13"), absolute.scale)
+                assertEquals(BigDecimal("4.0"), daily.amountAt(0.5))
+            }
+        }
+    }
+
+    @Test fun yearlyRateMeansExcludeMissingDatesAndUseFullCalendarMonthPositions() {
+        val data = snapshot(bucket("2026-01-01", "100"), bucket("2026-03-01", "200"))
+        val rates = mapOf(
+            LocalDate.parse("2025-12-31") to BigDecimal("1000"),
+            LocalDate.parse("2026-01-30") to BigDecimal("4"),
+            LocalDate.parse("2026-01-31") to BigDecimal("8"),
+            LocalDate.parse("2026-03-01") to BigDecimal.ZERO,
+            LocalDate.parse("2027-01-01") to BigDecimal("1000"),
+        )
+        val projection = chartProjection(year, data, mode = ConsumptionChartMode.DAILY_ESTIMATE, dailyRates = rates)
+        assertEquals(12, projection.positionCount)
+        assertEquals(listOf(0, 2), projection.entries.map { it.offset })
+        assertEquals(listOf(BigDecimal("6"), BigDecimal.ZERO), projection.entries.map { it.value })
+        assertEquals(DateRange(LocalDate.parse("2026-01-01"), LocalDate.parse("2026-01-31")),
+            projection.entries.first().range)
+        assertEquals(DateRange(LocalDate.parse("2026-03-01"), LocalDate.parse("2026-03-31")),
+            projection.entries.last().range)
+        assertTrue(projection.entries.last().isZero)
+    }
+
+    @Test fun dailyZeroMissingAndExtremeValuesKeepExistingGraphicsAndDecimalPolicies() {
+        val dates = listOf("2026-10-02", "2026-10-03", "2026-10-31").map(LocalDate::parse)
+        val values = listOf(BigDecimal("0.000"), BigDecimal("1E-1000"), BigDecimal("1E+1000"))
+        val rates = dates.zip(values).toMap()
+        val data = snapshot(*dates.map { bucket(it.toString(), "1") }.toTypedArray())
+        val projected = chartProjection(october, data, mode = ConsumptionChartMode.DAILY_ESTIMATE, dailyRates = rates)
+        assertEquals(listOf(1, 2, 30), projected.entries.map { it.offset })
+        assertEquals(values, projected.entries.map { it.value })
+        assertTrue(projected.entries.first().isZero)
+        assertEquals(0.0, projected.entries.first().normalizedY, 0.0)
+        assertFalse(projected.entries[1].isZero)
+        assertEquals(Double.MIN_VALUE, projected.entries[1].normalizedY, 0.0)
+        assertEquals(1.0, projected.entries.last().normalizedY, 0.0)
+        values.zip(projected.entries).forEach { (value, entry) -> assertSame(value, entry.value) }
+        assertEquals(0, projected.scale.compareTo(projected.amountAt(1.0)))
+
+        val zeroOnly = chartProjection(october, data, mode = ConsumptionChartMode.DAILY_ESTIMATE,
+            dailyRates = mapOf(dates.first() to BigDecimal("0.000")))
+        assertTrue(zeroOnly.entries.single().isZero)
+        assertEquals(0, zeroOnly.scale.signum())
+        assertEquals(0, zeroOnly.amountAt(0.5).signum())
+    }
+
+    @Test fun openingOnlyHasAbsoluteMarkButNoDailyMarkAndDoesNotHideValidTemperature() {
+        val source = replacementTracker("2026-10-28", null)
+        val tracker = source.copy(readings = source.readings.filter { it.installationId == "new" })
+        val temperatures = mapOf(LocalDate.parse("2026-10-28") to BigDecimal("9.25"))
+        for (period in listOf(october, year)) {
+            val data = dashboard(tracker, period)
+            val absolute = chartProjection(period, data, temperatures)
+            val daily = chartProjection(period, data, temperatures, ConsumptionChartMode.DAILY_ESTIMATE,
+                dailyConsumptionRates(tracker, period))
+            assertEquals(BigDecimal("10.0000"), absolute.entries.single().value)
+            assertTrue(daily.entries.isEmpty())
+            assertEquals(BigDecimal.ZERO, daily.scale)
+            assertEquals(absolute.temperatures, daily.temperatures)
+            assertEquals(BigDecimal("9.25"), daily.temperatures.single().celsius)
+            assertEquals(BigDecimal("10.0000"), data.total.cubicMetres)
+        }
+    }
+
+    @Test fun mixedOpeningDayUsesOnlyEligibleRateAndKeepsTemperatureInBothModes() {
+        val tracker = replacementTracker("2026-10-28", "13.0000", 1)
+        val temperatures = mapOf(
+            LocalDate.parse("2026-10-28") to BigDecimal("9"),
+            LocalDate.parse("2026-10-29") to BigDecimal("11"),
+        )
+        for (period in listOf(october, year)) {
+            val data = dashboard(tracker, period)
+            val absolute = chartProjection(period, data, temperatures)
+            val daily = chartProjection(period, data, temperatures, ConsumptionChartMode.DAILY_ESTIMATE,
+                dailyConsumptionRates(tracker, period))
+            assertEquals(absolute.temperatures, daily.temperatures)
+            val expected = if (period.type == PeriodType.YEAR) listOf("4") else listOf("5", "3")
+            assertEquals(expected.size, daily.entries.size)
+            expected.zip(daily.entries).forEach { (value, entry) ->
+                assertEquals(0, BigDecimal(value).compareTo(entry.value))
+            }
+            assertEquals(BigDecimal("18.0000"), data.total.cubicMetres)
+        }
+    }
+
     @Test fun emptyBaselineAndOutsidePeriodHaveNoMarksOrInventedScale() {
         for (readings in listOf(
             emptyList(),
@@ -50,7 +207,7 @@ class ChartProjectionTest {
             assertEquals(31, projected.positionCount)
             assertTrue(projected.entries.isEmpty())
             assertEquals(BigDecimal.ZERO, projected.scale)
-            assertEquals(0, projected.cubicMetresAt(1.0).signum())
+            assertEquals(0, projected.amountAt(1.0).signum())
         }
     }
 
@@ -59,7 +216,7 @@ class ChartProjectionTest {
         val data = snapshot(source)
         val projected = chartProjection(october, data)
         val entry = projected.entries.single()
-        assertSame(source.amount.cubicMetres, entry.cubicMetres)
+        assertSame(source.amount.cubicMetres, entry.value)
         assertSame(source.range, entry.range)
         assertEquals(19, entry.offset)
         assertEquals(1.0, entry.normalizedY, 0.0)
@@ -76,7 +233,7 @@ class ChartProjectionTest {
         assertEquals(listOf(1, 30), projected.entries.map { it.offset })
         assertTrue(projected.entries.all { it.isZero && it.normalizedY == 0.0 })
         assertEquals(0, projected.scale.signum())
-        assertEquals(0, projected.cubicMetresAt(0.5).signum())
+        assertEquals(0, projected.amountAt(0.5).signum())
         assertEquals(31, projected.positionCount)
     }
 
@@ -168,12 +325,12 @@ class ChartProjectionTest {
         val monthData = dashboard(readings, october)
         val daily = chartProjection(october, monthData)
         assertEquals(listOf(1, 2, 3), daily.entries.map { it.offset })
-        assertEquals(listOf(BigDecimal("4"), BigDecimal("4"), BigDecimal("4")), daily.entries.map { it.cubicMetres })
+        assertEquals(listOf(BigDecimal("4"), BigDecimal("4"), BigDecimal("4")), daily.entries.map { it.value })
         val yearData = dashboard(readings, year)
         val monthly = chartProjection(year, yearData)
         assertEquals(12, monthly.positionCount)
         assertEquals(9, monthly.entries.single().offset)
-        assertEquals(BigDecimal("12"), monthly.entries.single().cubicMetres)
+        assertEquals(BigDecimal("12"), monthly.entries.single().value)
         assertEquals(monthData.total.cubicMetres, yearData.total.cubicMetres)
     }
 
@@ -182,9 +339,9 @@ class ChartProjectionTest {
         val data = dashboard(readings, year)
         val projected = chartProjection(year, data)
         assertEquals(listOf(0, 1, 2), projected.entries.map { it.offset })
-        assertEquals(listOf(BigDecimal("1"), BigDecimal("28"), BigDecimal("1")), projected.entries.map { it.cubicMetres })
+        assertEquals(listOf(BigDecimal("1"), BigDecimal("28"), BigDecimal("1")), projected.entries.map { it.value })
         data.buckets.zip(projected.entries).forEach { (source, entry) ->
-            assertSame(source.amount.cubicMetres, entry.cubicMetres)
+            assertSame(source.amount.cubicMetres, entry.value)
             assertEquals(source.range, entry.range)
         }
         assertEquals(BigDecimal("30"), data.total.cubicMetres)
@@ -203,10 +360,10 @@ class ChartProjectionTest {
                 assertTrue(entry.normalizedY.isFinite())
                 assertTrue(entry.normalizedY > 0.0 && entry.normalizedY <= 1.0)
                 assertFalse(entry.isZero)
-                assertEquals(BigDecimal(values[index]), entry.cubicMetres)
-                assertSame(data.buckets[index].amount.cubicMetres, entry.cubicMetres)
+                assertEquals(BigDecimal(values[index]), entry.value)
+                assertSame(data.buckets[index].amount.cubicMetres, entry.value)
             }
-            assertEquals(0, projected.scale.compareTo(projected.cubicMetresAt(1.0)))
+            assertEquals(0, projected.scale.compareTo(projected.amountAt(1.0)))
         }
     }
 
@@ -228,10 +385,10 @@ class ChartProjectionTest {
         val projected = chartProjection(october, data)
         assertEquals(BigDecimal.ONE, data.total.cubicMetres)
         data.buckets.zip(projected.entries).forEach { (source, entry) ->
-            assertSame(source.amount.cubicMetres, entry.cubicMetres)
-            assertEquals(BigDecimal("0.3333333333333333333333333333333333"), entry.cubicMetres)
+            assertSame(source.amount.cubicMetres, entry.value)
+            assertEquals(BigDecimal("0.3333333333333333333333333333333333"), entry.value)
         }
-        assertNotEquals(data.total.cubicMetres, projected.entries.fold(BigDecimal.ZERO) { sum, entry -> sum + entry.cubicMetres })
+        assertNotEquals(data.total.cubicMetres, projected.entries.fold(BigDecimal.ZERO) { sum, entry -> sum + entry.value })
     }
 
     @Test fun weeklyRowsPartitionFullyCoveredMonthAndPreserveUnroundedSums() {
@@ -306,8 +463,8 @@ class ChartProjectionTest {
         val before = chartProjection(october, dashboard(readings, october))
         readings[1] = reading("2026-10-04", "106")
         val edited = chartProjection(october, dashboard(readings, october))
-        assertEquals(BigDecimal("4"), before.entries.first().cubicMetres)
-        assertEquals(BigDecimal("2"), edited.entries.first().cubicMetres)
+        assertEquals(BigDecimal("4"), before.entries.first().value)
+        assertEquals(BigDecimal("2"), edited.entries.first().value)
         assertNotEquals(before, edited)
         assertEquals(before.entries.map { it.normalizedY }, edited.entries.map { it.normalizedY })
         val changedPeriod = chartProjection(year, dashboard(readings, year))
@@ -328,9 +485,9 @@ class ChartProjectionTest {
         buckets += bucket("2026-10-31", "2")
         val second = chartProjection(october, data)
         assertEquals(1, first.entries.single().offset)
-        assertEquals(BigDecimal.ONE, first.entries.single().cubicMetres)
+        assertEquals(BigDecimal.ONE, first.entries.single().value)
         assertEquals(30, second.entries.single().offset)
-        assertEquals(BigDecimal("2"), second.entries.single().cubicMetres)
+        assertEquals(BigDecimal("2"), second.entries.single().value)
     }
 
     @Test fun axisLabelsAreLocalizedAndExtremeMagnitudesStayCompact() {
@@ -366,7 +523,7 @@ class ChartProjectionTest {
         assertEquals(data.buckets.size, projected.entries.size)
         data.buckets.zip(projected.entries).forEach { (bucket, entry) ->
             assertEquals(bucket.range, entry.range)
-            assertSame(bucket.amount.cubicMetres, entry.cubicMetres)
+            assertSame(bucket.amount.cubicMetres, entry.value)
             assertEquals(bucket.amount.cubicMetres!!.signum() == 0, entry.isZero)
         }
     }
@@ -396,7 +553,7 @@ class ChartProjectionTest {
         val data = dashboard(source, october)
         val chart = chartProjection(october, data)
         assertEquals(listOf(27, 28), chart.entries.map { it.offset })
-        assertEquals(listOf(BigDecimal("15.0000"), BigDecimal("3.0000")), chart.entries.map { it.cubicMetres })
+        assertEquals(listOf(BigDecimal("15.0000"), BigDecimal("3.0000")), chart.entries.map { it.value })
         assertAuthoritativeBuckets(source, october, "18.0000")
         assertAuthoritativeBuckets(source, year, "18.0000")
     }
@@ -405,7 +562,7 @@ class ChartProjectionTest {
         val source = replacementTracker("2026-10-28", null)
         val before = chartProjection(october, dashboard(source, october))
         assertEquals(listOf(27), before.entries.map { it.offset })
-        assertEquals(listOf(BigDecimal("15.0000")), before.entries.map { it.cubicMetres })
+        assertEquals(listOf(BigDecimal("15.0000")), before.entries.map { it.value })
         val initial = source.readings.single { it.id == "new-initial" }
         val tracker = source.copy(readings = source.readings + initial.copy(id = "zero-next",
             date = initial.date.plusDays(1), observedAt = initial.observedAt.plusSeconds(86400)))
@@ -434,9 +591,9 @@ class ChartProjectionTest {
         val third = BigDecimal("0.3333333333333333333333333333333333")
         assertEquals(
             listOf(third, third, BigDecimal("10.3333333333333333333333333333333333"), third, third, third),
-            projected.entries.map { it.cubicMetres },
+            projected.entries.map { it.value },
         )
-        assertNotEquals(data.total.cubicMetres, projected.entries.fold(BigDecimal.ZERO) { sum, entry -> sum + entry.cubicMetres })
+        assertNotEquals(data.total.cubicMetres, projected.entries.fold(BigDecimal.ZERO) { sum, entry -> sum + entry.value })
     }
 
     @Test fun boundaryCorrectionsAndOrdinaryDeletionRefreshMarksWithoutJoiningMeters() {
@@ -450,8 +607,8 @@ class ChartProjectionTest {
             }
         })
         val edited = chartProjection(october, dashboard(corrected, october))
-        assertEquals(listOf(BigDecimal("17.0000"), BigDecimal("2.0000")), edited.entries.map { it.cubicMetres })
-        assertEquals(listOf(BigDecimal("15.0000"), BigDecimal("3.0000")), before.entries.map { it.cubicMetres })
+        assertEquals(listOf(BigDecimal("17.0000"), BigDecimal("2.0000")), edited.entries.map { it.value })
+        assertEquals(listOf(BigDecimal("15.0000"), BigDecimal("3.0000")), before.entries.map { it.value })
         assertAuthoritativeBuckets(corrected, october, "19.0000")
         val deleted = corrected.copy(readings = corrected.readings.filterNot { it.id == "new-next" })
         assertEquals(listOf(27), chartProjection(october, dashboard(deleted, october)).entries.map { it.offset })

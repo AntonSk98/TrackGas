@@ -103,6 +103,7 @@ private fun TrackGasApp(tracker: TrackerViewModel, onExport: () -> Unit, onImpor
             currentDate = tracker::today,
             onSelectTab = tracker::selectTab,
             onSelectPeriod = tracker::selectPeriod,
+            onSelectChartMode = tracker::selectChartMode,
             onNavigate = tracker::navigate,
             onRetryLoad = tracker::retryLoad,
             onOpenAdd = tracker::openAdd,
