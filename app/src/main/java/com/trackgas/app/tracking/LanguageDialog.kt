@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -27,7 +26,7 @@ fun LanguageDialog(
     onDismiss: () -> Unit,
     onSelect: (AppLanguage) -> Unit,
 ) {
-    AlertDialog(
+    ResponsiveAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.language)) },
         text = {
@@ -49,6 +48,7 @@ fun LanguageDialog(
                         Spacer(Modifier.width(12.dp))
                         Text(
                             text = stringResource(language.labelRes),
+                            modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyLarge,
                         )
                     }

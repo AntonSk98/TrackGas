@@ -1,25 +1,29 @@
 package com.trackgas.app.tracking
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SelectableDates
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TimePickerLayoutType
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
@@ -30,14 +34,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.trackgas.app.R
 import java.time.LocalDate
 import java.time.LocalTime
@@ -52,7 +53,7 @@ import java.util.Locale
  *
  * [onSave] starts an asynchronous operation; committed success closes the form.
  * Cancel/dismiss discards the draft without
- * publishing it. Compact-height layouts scroll the whole form so a landscape
+ * publishing it. The whole form scrolls within safe/IME bounds so a landscape
  * keyboard cannot squeeze a field behind a pinned action row.
  */
 @Composable
@@ -123,7 +124,7 @@ internal fun ReadingForm(
     )
     if (reading == null && showPicker) {
         AddReadingDatePicker(
-            date, today, tracker,
+            date, today, tracker, locale,
             onDismiss = { draft.choosingDate = false; draft.duplicateDismissed = true },
             onConfirm = {
                 draft.dateIso = it.toString()
@@ -136,6 +137,7 @@ internal fun ReadingForm(
     if (draft.choosingTime) {
         ReadingTimePicker(
             time = selectedTime,
+            locale = locale,
             onDismiss = { draft.choosingTime = false },
             onConfirm = {
                 draft.time = it.toString()
@@ -150,52 +152,84 @@ internal fun ReadingForm(
 @Composable
 private fun ReadingTimePicker(
     time: LocalTime,
+    locale: Locale,
     onDismiss: () -> Unit,
     onConfirm: (LocalTime) -> Unit,
 ) {
     val picker = rememberTimePickerState(initialHour = time.hour, initialMinute = time.minute, is24Hour = true)
-    val configuration = LocalConfiguration.current
-    val horizontal = configuration.screenHeightDp < 480 && configuration.screenWidthDp >= 600
-    Dialog(
+    var input by rememberSaveable { mutableStateOf(formatTimePickerInput(time)) }
+    var lastSelection by rememberSaveable { mutableStateOf(formatTimePickerInput(time)) }
+    val parsedInput = remember(input) { parseTimePickerInput(input) }
+    val fontScale = LocalDensity.current.fontScale
+    ResponsiveDialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Surface(
-            modifier = Modifier.safeDrawingPadding().padding(16.dp).widthIn(max = 560.dp).fillMaxWidth(),
-            shape = MaterialTheme.shapes.extraLarge,
-            tonalElevation = 6.dp,
-        ) {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Text(
-                    stringResource(R.string.observation_time),
+        val presentation = timePickerPresentation(
+            (maxWidth - 48.dp).value.coerceAtLeast(0f),
+            // Reserve title/actions and spacing at the user's font size.
+            (maxHeight - 48.dp).value - 128f * fontScale,
+            fontScale,
+        )
+        LaunchedEffect(picker.hour, picker.minute) {
+            val selection = LocalTime.of(picker.hour, picker.minute)
+            input = timePickerInputAfterSelection(input, lastSelection, selection)
+            lastSelection = formatTimePickerInput(selection)
+        }
+        ResponsiveDialogContent {
+            Text(
+                stringResource(R.string.observation_time),
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.headlineSmall,
+            )
+            if (presentation == TimePickerPresentation.INPUT) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { changed ->
+                        input = changed
+                        parseTimePickerInput(changed)?.let {
+                            lastSelection = formatTimePickerInput(it)
+                            picker.hour = it.hour
+                            picker.minute = it.minute
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
-                    style = MaterialTheme.typography.headlineSmall,
+                    label = { Text(stringResource(R.string.observation_time)) },
+                    placeholder = { Text(timeText(time, locale)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                    singleLine = true,
+                    isError = parsedInput == null,
+                    supportingText = {
+                        if (parsedInput == null) Text(stringResource(R.string.invalid_time))
+                    },
                 )
+            } else {
                 TimePicker(
                     state = picker,
-                    layoutType = if (horizontal) TimePickerLayoutType.Horizontal else TimePickerLayoutType.Vertical,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                    layoutType = if (presentation == TimePickerPresentation.HORIZONTAL)
+                        TimePickerLayoutType.Horizontal else TimePickerLayoutType.Vertical,
                 )
-                FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-                    TextButton(onClick = { onConfirm(LocalTime.of(picker.hour, picker.minute)) }) {
-                        Text(stringResource(R.string.ok))
-                    }
+            }
+            FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+                TextButton(
+                    enabled = presentation != TimePickerPresentation.INPUT || parsedInput != null,
+                    onClick = { onConfirm(LocalTime.of(picker.hour, picker.minute)) },
+                ) {
+                    Text(stringResource(R.string.ok))
                 }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun AddReadingDatePicker(
     date: LocalDate,
     today: LocalDate,
     tracker: TrackerData,
+    locale: Locale,
     onDismiss: () -> Unit,
     onConfirm: (LocalDate) -> Unit,
 ) {
@@ -211,26 +245,40 @@ private fun AddReadingDatePicker(
     val pickerDateError = picker.selectedDateMillis?.let {
         validateReadingDate(tracker, null, pickerDate(it), today)
     }
-    DatePickerDialog(
+    ResponsiveDialog(
         onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(
-                enabled = picker.selectedDateMillis != null && pickerDateError == null,
-                onClick = { picker.selectedDateMillis?.let { onConfirm(pickerDate(it)) } },
-            ) { Text(stringResource(R.string.confirm_date)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-        },
     ) {
-        Column {
-            pickerDateError?.let {
-                DateError(it, Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+        val calendarWidth = maxOf(360.dp, maxWidth)
+        val horizontalScroll = rememberScrollState()
+        Column(
+            Modifier.verticalScroll(rememberScrollState()).padding(vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            pickerDateError?.let { DateError(it, Modifier.padding(horizontal = 24.dp)) }
+            Box(Modifier.fillMaxWidth().horizontalScroll(horizontalScroll)) {
+                DatePicker(
+                    picker,
+                    modifier = Modifier.width(calendarWidth),
+                    title = { Text(stringResource(R.string.date), Modifier.padding(16.dp)) },
+                    headline = {
+                        picker.selectedDateMillis?.let {
+                            Text(
+                                dateText(pickerDate(it), locale),
+                                Modifier.fillMaxWidth().padding(16.dp),
+                                style = MaterialTheme.typography.headlineSmall,
+                            )
+                        }
+                    },
+                    showModeToggle = false,
+                )
             }
-            DatePicker(
-                picker,
-                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-            )
+            FlowRow(Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+                TextButton(
+                    enabled = picker.selectedDateMillis != null && pickerDateError == null,
+                    onClick = { picker.selectedDateMillis?.let { onConfirm(pickerDate(it)) } },
+                ) { Text(stringResource(R.string.confirm_date)) }
+            }
         }
     }
 }

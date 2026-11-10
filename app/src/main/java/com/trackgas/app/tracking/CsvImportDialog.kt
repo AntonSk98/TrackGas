@@ -2,10 +2,6 @@ package com.trackgas.app.tracking
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -29,22 +25,23 @@ internal fun CsvImportDialog(
     when (state) {
         CsvImportState.Idle, is CsvImportState.Selecting -> Unit
         is CsvImportState.Cancelled -> LaunchedEffect(state.requestId) { onAcknowledge(state.requestId) }
-        is CsvImportState.Reading -> AlertDialog(
+        is CsvImportState.Reading -> ResponsiveAlertDialog(
+            dismissEnabled = false,
             onDismissRequest = {},
             text = { Text(stringResource(R.string.csv_import_reading)) },
             confirmButton = {},
         )
-        is CsvImportState.Applying -> AlertDialog(
+        is CsvImportState.Applying -> ResponsiveAlertDialog(
+            dismissEnabled = false,
             onDismissRequest = {},
             text = { Text(stringResource(R.string.csv_import_applying)) },
             confirmButton = {},
         )
-        is CsvImportState.Preview -> AlertDialog(
+        is CsvImportState.Preview -> ResponsiveAlertDialog(
             onDismissRequest = { onCancel(state.requestId) },
             title = { Text(stringResource(R.string.csv_import_preview_title)) },
             text = {
                 Column(
-                    modifier = Modifier.widthIn(max = 480.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(stringResource(R.string.csv_import_replacement_warning))
@@ -61,14 +58,14 @@ internal fun CsvImportDialog(
                 TextButton(onClick = { onCancel(state.requestId) }) { Text(stringResource(R.string.cancel)) }
             },
         )
-        is CsvImportState.Complete -> AlertDialog(
+        is CsvImportState.Complete -> ResponsiveAlertDialog(
             onDismissRequest = { onAcknowledge(state.requestId) },
             text = { Text(stringResource(R.string.csv_import_complete, state.affectedMeters)) },
             confirmButton = {
                 TextButton(onClick = { onAcknowledge(state.requestId) }) { Text(stringResource(R.string.ok)) }
             },
         )
-        is CsvImportState.Failed -> AlertDialog(
+        is CsvImportState.Failed -> ResponsiveAlertDialog(
             onDismissRequest = { onAcknowledge(state.requestId) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

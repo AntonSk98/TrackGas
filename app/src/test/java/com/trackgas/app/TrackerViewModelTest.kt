@@ -106,16 +106,41 @@ class TrackerViewModelTest {
         } finally {
             store.clear()
         }
+    }
 
-    @Test fun cancelledExportProducesNoCompletionAndAllowsRetry() = runTest {
-            val repo = ScriptedReadingRepository()
-            val vm = TrackerViewModel(repo) { today }
-            repo.deliver(TrackerData()); runCurrent()
+    @Test fun failedExportRetainsFeedbackUntilAcknowledgedAfterOwnerRecreation() = runTest {
+        val repo = ScriptedReadingRepository()
+        val store = ViewModelStore()
+        val factory = TrackerViewModel.factory(repo)
+        try {
+            val vm = ViewModelProvider(store, factory)[TrackerViewModel::class.java]
+            repo.deliver(listOf(one, two)); runCurrent()
             val request = requireNotNull(vm.requestExport())
-            vm.cancelExport(request)
+            assertNotNull(vm.beginExportWrite(request))
+            vm.finishExportWrite(request, false)
+            val failed = ExportState.Complete(request, false)
+            assertEquals(failed, vm.state.export)
+            assertSame(vm, ViewModelProvider(store, factory)[TrackerViewModel::class.java])
+            assertNull(vm.requestExport())
+            vm.acknowledgeExport("stale")
+            vm.finishExportWrite(request, true)
+            assertEquals(failed, vm.state.export)
+            vm.acknowledgeExport(request)
             assertEquals(ExportState.Idle, vm.state.export)
             assertNotNull(vm.requestExport())
+        } finally {
+            store.clear()
         }
+    }
+
+    @Test fun cancelledExportProducesNoCompletionAndAllowsRetry() = runTest {
+        val repo = ScriptedReadingRepository()
+        val vm = TrackerViewModel(repo) { today }
+        repo.deliver(TrackerData()); runCurrent()
+        val request = requireNotNull(vm.requestExport())
+        vm.cancelExport(request)
+        assertEquals(ExportState.Idle, vm.state.export)
+        assertNotNull(vm.requestExport())
     }
 
     @Test fun csvImportSelectionPreviewAndConfirmationAreSingleSubmissionAndPublishCommit() = runTest {
@@ -583,6 +608,93 @@ class TrackerViewModelTest {
         assertEquals(ReadingLoadState.READY, vm.state.loadState)
         assertEquals(before.dialog, vm.state.dialog)
         assertEquals(2, repo.subscriptions)
+    }
+
+    @Test fun configurationAndResizeRetentionDoNotReplayPendingOrFailedMutations() = runTest {
+        for (operation in listOf("save", "delete", "replace", "purge", "import")) {
+            val repo = ScriptedReadingRepository()
+            val owner = TrackerStoreOwner()
+            val factory = object : ViewModelProvider.Factory {
+                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
+                    modelClass.cast(TrackerViewModel(repo, ioDispatcher = dispatcher) { today })!!
+            }
+            fun retained() = ViewModelProvider(
+                owner.obtain("tracker", 10, setOf(10)), factory,
+            )[TrackerViewModel::class.java]
+            try {
+                val vm = retained()
+                repo.deliver(listOf(two, one)); runCurrent()
+                vm.selectPeriod(PeriodType.MONTH)
+                vm.navigate(-1)
+                vm.selectTab(TrackerTab.HISTORY)
+                when (operation) {
+                    "save" -> { vm.openEdit(two); vm.save(two.date, "113", Locale.US) }
+                    "delete" -> { vm.openDelete(two); vm.delete() }
+                    "replace" -> { vm.openReplacement(); vm.replaceMeter() }
+                    "purge" -> { vm.openPurge(); vm.purge() }
+                    "import" -> {
+                        val preview = CsvImportPreview(
+                            "preview", 1,
+                            listOf(CsvImportMeterChange(one.installationId, 2, 1)), 0,
+                            TrackerData(listOf(two, one)),
+                            listOf(testCsvRow(one.installationId, one.date, one.cubicMetres, 2)),
+                        )
+                        val request = requireNotNull(vm.requestCsvImport())
+                        repo.csvPreviewOutcomes.send(Result.success(CsvImportPreviewResult.Ready(preview)))
+                        vm.readCsvImport(request) { ByteArrayInputStream("fixture".toByteArray()) }
+                        runCurrent()
+                        vm.confirmCsvImport()
+                    }
+                }
+                runCurrent()
+                val pending = vm.state
+                assertTrue(pending.dialog.pending || pending.csvImport is CsvImportState.Applying)
+                fun submissions() = repo.saves.size + repo.deletes.size + repo.replacements.size +
+                    repo.purges + repo.csvConfirmations.size
+                assertEquals(1, submissions())
+                for (configuring in listOf(true, false, true)) {
+                    owner.onDestroyed("tracker", false, configuring)
+                    assertSame(vm, retained())
+                    assertEquals(pending, vm.state)
+                    vm.dismissDialog()
+                    vm.save(two.date, "113", Locale.US)
+                    vm.delete(); vm.replaceMeter(); vm.purge(); vm.confirmCsvImport()
+                    runCurrent()
+                    assertEquals(pending, vm.state)
+                    assertEquals(1, submissions())
+                }
+                val failure = ReadingStorageException(IOException("synthetic failure"))
+                when (operation) {
+                    "save" -> repo.saveOutcomes.send(Result.failure(failure))
+                    "delete" -> repo.deleteOutcomes.send(Result.failure(failure))
+                    "replace" -> repo.replacementOutcomes.send(Result.failure(failure))
+                    "purge" -> repo.purgeOutcomes.send(Result.failure(failure))
+                    "import" -> repo.csvCommitOutcomes.send(Result.failure(failure))
+                }
+                runCurrent()
+                val failed = vm.state
+                assertFalse(failed.dialog.pending)
+                assertTrue(when (operation) {
+                    "save" -> (failed.dialog as ReadingDialog.Editing).phase is SavePhase.Failed
+                    "delete" -> (failed.dialog as ReadingDialog.ConfirmingDeletion).phase is DeletePhase.Failed
+                    "replace" -> (failed.dialog as ReadingDialog.Replacing).phase is ReplacementPhase.Failed
+                    "purge" -> (failed.dialog as ReadingDialog.ConfirmingPurge).phase is PurgePhase.Failed
+                    else -> failed.csvImport is CsvImportState.Failed
+                })
+                for (configuring in listOf(false, true)) {
+                    owner.onDestroyed("tracker", false, configuring)
+                    assertSame(vm, retained())
+                    runCurrent()
+                    assertEquals(failed, vm.state)
+                    assertEquals(1, submissions())
+                }
+                assertEquals(pending.period, failed.period)
+                assertEquals(TrackerTab.HISTORY, failed.tab)
+                assertEquals(listOf(two, one), failed.readings)
+            } finally {
+                owner.release("tracker")
+            }
+        }
     }
 
     @Test fun navigationAndFreshSessionDefaultsDoNotChangeCommittedReadings() = runTest {

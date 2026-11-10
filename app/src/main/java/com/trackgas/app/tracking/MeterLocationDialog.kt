@@ -4,7 +4,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -28,7 +30,7 @@ internal fun MeterLocationDialog(
 ) {
     val searching = state.lookup is LocationLookupState.Resolving
     val error = (state.lookup as? LocationLookupState.Error)?.reason
-    AlertDialog(
+    ResponsiveAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.meter_location_title)) },
         text = {
@@ -39,7 +41,7 @@ internal fun MeterLocationDialog(
                 OutlinedTextField(
                     value = state.query,
                     onValueChange = onQueryChange,
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     label = { Text(stringResource(R.string.meter_location_input_label)) },
                     singleLine = true,
                     isError = error != null,
@@ -51,16 +53,19 @@ internal fun MeterLocationDialog(
                         }
                     },
                 )
-                state.suggestions.forEach { place ->
-                    HorizontalDivider()
-                    Text(
-                        place.displayName,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(place) }
-                            .padding(vertical = 12.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                Column(Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                    state.suggestions.forEach { place ->
+                        HorizontalDivider()
+                        Text(
+                            place.displayName,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .clickable { onSelect(place) }
+                                .padding(vertical = 12.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                 }
             }
         },

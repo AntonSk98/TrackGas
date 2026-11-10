@@ -2,7 +2,6 @@ package com.trackgas.app.tracking
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -27,7 +26,8 @@ internal fun DeleteReadingDialog(
     onDismiss: () -> Unit,
 ) {
     val pending = dialog.pending
-    AlertDialog(
+    ResponsiveAlertDialog(
+        dismissEnabled = !pending,
         onDismissRequest = { if (!pending) onDismiss() },
         title = { Text(stringResource(R.string.delete_reading)) },
         text = {

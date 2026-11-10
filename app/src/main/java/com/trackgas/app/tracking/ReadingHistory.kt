@@ -3,7 +3,8 @@ package com.trackgas.app.tracking
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -14,7 +15,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -29,6 +29,7 @@ import java.util.Locale
  * coordinator to open the shared editor or deletion confirmation, never mutate data.
  * Raw meter precision is retained in both the display and editor.
  */
+@OptIn(ExperimentalLayoutApi::class)
 internal fun LazyListScope.historyItems(
     readings: List<Reading>,
     locale: Locale,
@@ -83,9 +84,10 @@ internal fun LazyListScope.historyItems(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(date, style = MaterialTheme.typography.titleMedium)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(value, style = MaterialTheme.typography.headlineSmall)
                 if (installations.size > 1) {

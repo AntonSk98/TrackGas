@@ -2,6 +2,10 @@ schema: spec-driven
 githubCopilot:
   cloudAgent: true
 
+context: |
+  Keep README.md minimal and user-facing, with only essential setup/build guidance.
+  Do not add implementation reports, acceptance matrices, or test evidence to README.md.
+
 # Project context (optional)
 # Add only constraints that should guide OpenSpec artifacts and workflows.
 # Include constraints an agent cannot infer by reading the code.

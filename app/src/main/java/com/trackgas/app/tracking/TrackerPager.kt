@@ -3,10 +3,13 @@ package com.trackgas.app.tracking
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
@@ -68,6 +71,7 @@ internal fun TrackerPager(
                 toolbar()
                 val selectedPage = if (navigationReady) pager.targetPage else tab.ordinal
                 PrimaryTabRow(
+                    modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
                     selectedTabIndex = selectedPage,
                     containerColor = MaterialTheme.colorScheme.background,
                     indicator = {
