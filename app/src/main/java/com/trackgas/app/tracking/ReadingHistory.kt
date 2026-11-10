@@ -16,6 +16,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -37,6 +39,7 @@ internal fun LazyListScope.historyItems(
     onDelete: (Reading) -> Unit,
     tracker: TrackerData = TrackerData(readings),
 ) {
+    val estimates = history24HourEstimates(tracker)
     val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
     val meterNumbers = installations.mapIndexed { index, installation -> installation.id to index + 1 }.toMap()
     val ordered = readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { meterNumbers[it.installationId] })
@@ -92,6 +95,16 @@ internal fun LazyListScope.historyItems(
                 Text(value, style = MaterialTheme.typography.headlineSmall)
                 if (installations.size > 1) {
                     Text(meter, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                estimates[reading.id]?.let { estimate ->
+                    val amount = numberText(estimate, locale)
+                    val description = stringResource(R.string.history_24h_estimate_description, amount)
+                    Text(
+                        stringResource(R.string.history_24h_estimate, amount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clearAndSetSemantics { contentDescription = description },
+                    )
                 }
             }
             reading.note?.takeUnless { it.isBlank() }?.let { note ->

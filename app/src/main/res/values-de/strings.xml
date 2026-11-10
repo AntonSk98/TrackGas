@@ -90,6 +90,8 @@
     <string name="no_consumption">Füge mindestens zwei Zählerstände hinzu, um den Verbrauch für diesen Zeitraum zu sehen.</string>
     <string name="consumption_total">Verbrauch</string>
     <string name="volume">%1$s m³</string>
+    <string name="history_24h_estimate">≈ %1$s m³ / 24 h</string>
+    <string name="history_24h_estimate_description">Geschätzter 24-Stunden-Verbrauch: %1$s Kubikmeter</string>
     <string name="chart_marker">%1$s\n%2$s</string>
     <string name="reading_history">Zählerverlauf</string>
     <string name="no_readings">Es gibt noch keine Zählerstände. Füge einen hinzu.</string>

@@ -90,6 +90,8 @@
     <string name="no_consumption">Add at least two readings to see consumption for this period.</string>
     <string name="consumption_total">Consumption</string>
     <string name="volume">%1$s m³</string>
+    <string name="history_24h_estimate">≈ %1$s m³ / 24 h</string>
+    <string name="history_24h_estimate_description">Estimated 24-hour consumption: %1$s cubic metres</string>
     <string name="chart_marker">%1$s\n%2$s</string>
     <string name="reading_history">Reading history</string>
     <string name="no_readings">No readings yet. Add a reading to get started.</string>

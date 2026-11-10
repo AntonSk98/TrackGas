@@ -9,9 +9,14 @@ import org.junit.Test
 class ConsumptionTest {
     @Test fun timeOnlyEditChangesWeatherWindowButNotCalendarConsumption() {
         val original = listOf(reading(1, "100"), reading(4, "112"))
-        val changed = original.map { it.copy(observedAt = it.observedAt.plusSeconds(12 * 3600)) }
+        val changed = original.mapIndexed { index, reading ->
+            reading.copy(observedAt = reading.observedAt.plusSeconds((index + 1L) * 6 * 3600))
+        }
         val range = DateRange(original.first().date, original.last().date)
         assertEquals(allocate(readingIntervals(original), range), allocate(readingIntervals(changed), range))
+        val period = CalendarPeriod(PeriodType.MONTH, original.first().date)
+        assertEquals(dashboard(original, period), dashboard(changed, period))
+        assertNotEquals(history24HourEstimates(TrackerData(original)), history24HourEstimates(TrackerData(changed)))
         val oldWeather = com.trackgas.app.temperature.readingIntervals(original).single()
         val newWeather = com.trackgas.app.temperature.readingIntervals(changed).single()
         assertNotEquals(oldWeather.start, newWeather.start)

@@ -2,6 +2,7 @@ package com.trackgas.app.tracking
 
 import java.math.BigDecimal
 import java.math.MathContext
+import java.time.Duration
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
@@ -26,6 +27,12 @@ data class ReadingInterval(val earlier: Reading, val later: Reading) {
     val lastCoveredDate: LocalDate get() = later.date
     val days: Long get() = ChronoUnit.DAYS.between(earlier.date, later.date)
     val cubicMetres: BigDecimal get() = later.cubicMetres.subtract(earlier.cubicMetres)
+    val cubicMetresPer24Hours: BigDecimal
+        get() = cubicMetres.multiply(BigDecimal.valueOf(86_400))
+            .divide(
+                BigDecimal.valueOf(Duration.between(earlier.observedAt, later.observedAt).seconds),
+                MathContext.DECIMAL128,
+            )
     val estimatedDistribution: Boolean get() = days > 1
 }
 
@@ -54,6 +61,9 @@ fun readingIntervals(tracker: TrackerData): List<ReadingInterval> {
     }
     return readingIntervals(tracker.readings)
 }
+
+internal fun history24HourEstimates(tracker: TrackerData): Map<String, BigDecimal> =
+    readingIntervals(tracker).associate { it.later.id to it.cubicMetresPer24Hours }
 
 private fun requireNonOverlapping(intervals: List<ReadingInterval>) {
     for (index in 1 until intervals.size) {

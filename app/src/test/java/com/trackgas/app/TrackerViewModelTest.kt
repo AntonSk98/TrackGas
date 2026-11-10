@@ -549,11 +549,17 @@ class TrackerViewModelTest {
             assertEquals(dialog.copy(phase = SavePhase.Failed(ReadingFailure(ReadingFailureCategory.STORAGE_ACCESS, ReadingAction.SAVE))), vm.state.dialog)
             assertEquals(before.readings, vm.state.readings)
             assertSame(before.dashboard, vm.state.dashboard)
+            assertEquals(history24HourEstimates(before.tracker), history24HourEstimates(vm.state.tracker))
             val changed = two.copy(cubicMetres = "115.2500".toBigDecimal())
             repo.saveOutcomes.send(Result.success(SaveReadingResult.Saved(CommittedSnapshot(2, listOf(changed, one)))))
             vm.save(today, "115.2500", Locale.US); runCurrent()
             assertEquals(ReadingDialog.Closed, vm.state.dialog)
             assertEquals(changed.cubicMetres, vm.state.readings.first().cubicMetres)
+            val estimates = history24HourEstimates(vm.state.tracker)
+            assertNotEquals(history24HourEstimates(before.tracker), estimates)
+            vm.openEdit(changed)
+            vm.dismissDialog()
+            assertEquals(estimates, history24HourEstimates(vm.state.tracker))
             vm.openDelete(changed)
             val deletion = vm.state.dialog as ReadingDialog.ConfirmingDeletion
             val projection = vm.state.dashboard
@@ -561,10 +567,12 @@ class TrackerViewModelTest {
             vm.delete(); runCurrent()
             assertEquals(deletion.copy(phase = DeletePhase.Failed(ReadingFailure(ReadingFailureCategory.STORAGE_ACCESS, ReadingAction.DELETE))), vm.state.dialog)
             assertSame(projection, vm.state.dashboard)
+            assertEquals(estimates, history24HourEstimates(vm.state.tracker))
             repo.deleteOutcomes.send(Result.success(DeleteReadingResult.Deleted(CommittedSnapshot(3, listOf(one)))))
             vm.delete(); runCurrent()
             assertEquals(ReadingDialog.Closed, vm.state.dialog)
             assertEquals(listOf(one), vm.state.readings)
+            assertTrue(history24HourEstimates(vm.state.tracker).isEmpty())
         }
     }
 

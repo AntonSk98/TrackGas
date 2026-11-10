@@ -15,6 +15,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReadingFormatTest {
+    @Test fun historyEstimatesUseLocalizedCalculatedRoundingWithoutChangingRawReadings() {
+        val estimate = BigDecimal("8.125")
+        assertEquals("8.1", numberText(estimate, Locale.US))
+        assertEquals("8,1", numberText(estimate, Locale.GERMANY))
+        assertEquals("8.2", numberText(BigDecimal("8.15"), Locale.US))
+        assertEquals("8,2", numberText(BigDecimal("8.15"), Locale.GERMANY))
+        assertEquals("0", numberText(BigDecimal.ZERO, Locale.US))
+        assertEquals("8.125", numberText(estimate, Locale.US, raw = true))
+        assertEquals(BigDecimal("8.125"), estimate)
+    }
+
     @Test fun observationTimeAlwaysUses24HourFormat() {
         assertEquals("08:05", timeText(LocalTime.of(8, 5), Locale.GERMANY))
         assertEquals("20:15", timeText(LocalTime.of(20, 15), Locale.US))
