@@ -5,7 +5,7 @@ import java.time.Instant
 import java.time.ZoneId
 
 /** Domain error codes mapped to localized field messages by [ReadingForm]. */
-enum class ReadingError { DATE_REQUIRED, FUTURE_DATE, DUPLICATE_DATE, VALUE_REQUIRED, INVALID_NUMBER, NEGATIVE_VALUE, BELOW_PREVIOUS, ABOVE_NEXT, MISSING_READING, TIME_REQUIRED, INVALID_TIME, FUTURE_TIME, TIME_ORDER }
+enum class ReadingError { DATE_REQUIRED, FUTURE_DATE, BEFORE_METER_START_DATE, DUPLICATE_DATE, VALUE_REQUIRED, INVALID_NUMBER, NEGATIVE_VALUE, BELOW_PREVIOUS, ABOVE_NEXT, MISSING_READING, TIME_REQUIRED, INVALID_TIME, FUTURE_TIME, TIME_ORDER }
 
 /** Independent date/value errors; both fields may be invalid in the same submission. */
 data class ReadingErrors(
@@ -17,7 +17,10 @@ data class ReadingErrors(
 }
 
 sealed interface ReadingValidation {
-    data class Accepted(val candidate: Reading) : ReadingValidation
+    data class Accepted(
+        val candidate: Reading,
+        val createdInstallation: MeterInstallation? = null,
+    ) : ReadingValidation
     data class Rejected(val errors: ReadingErrors) : ReadingValidation {
         init {
             require(!errors.isEmpty) { "Rejected reading validation requires at least one error" }
@@ -41,7 +44,8 @@ fun validateReadingDate(tracker: TrackerData, id: String?, date: LocalDate?, tod
     return when {
         date == null -> ReadingError.DATE_REQUIRED
         date > today -> ReadingError.FUTURE_DATE
-        installationId == null -> ReadingError.DUPLICATE_DATE
+        installationId == null && (tracker.readings.isNotEmpty() || tracker.installations.isNotEmpty()) ->
+            ReadingError.BEFORE_METER_START_DATE
         tracker.readings.any { it.id != id && it.installationId == installationId && it.date == date } -> ReadingError.DUPLICATE_DATE
         else -> null
     }
@@ -52,11 +56,26 @@ fun evaluateSave(
     readings: List<Reading>,
     intent: SaveReadingIntent.Add,
     addId: String,
-): ReadingValidation = evaluateSave(TrackerData(readings), intent, addId)
+): ReadingValidation = evaluateSave(TrackerData(readings), intent, addId, addId)
 
-fun evaluateSave(tracker: TrackerData, intent: SaveReadingIntent.Add, addId: String): ReadingValidation =
-    evaluateCandidate(tracker, addId, intent.date, intent.meter, intent.today,
-        intent.date?.let { installationForDate(tracker, it)?.id }, time = intent.time, zone = intent.zone, now = intent.now)
+fun evaluateSave(
+    tracker: TrackerData,
+    intent: SaveReadingIntent.Add,
+    addId: String,
+    newInstallationId: String = addId,
+): ReadingValidation {
+    val createdInstallation = if (tracker.installations.isEmpty() && tracker.readings.isEmpty()) {
+        intent.date?.let { MeterInstallation(newInstallationId, it) }
+    } else {
+        null
+    }
+    val installationId = createdInstallation?.id ?: intent.date?.let { installationForDate(tracker, it)?.id }
+    return evaluateCandidate(
+        tracker, addId, intent.date, intent.meter, intent.today, installationId,
+        time = intent.time, zone = intent.zone, now = intent.now,
+        newInstallation = createdInstallation,
+    )
+}
 
 /** Pure Edit policy; the latest persisted target supplies its immutable identity and date. */
 fun evaluateSave(readings: List<Reading>, intent: SaveReadingIntent.Edit): ReadingValidation {
@@ -73,7 +92,7 @@ fun evaluateSave(tracker: TrackerData, intent: SaveReadingIntent.Edit): ReadingV
     )
 }
 
-private fun evaluateCandidate(
+internal fun evaluateCandidate(
     tracker: TrackerData,
     id: String,
     date: LocalDate?,
@@ -85,9 +104,18 @@ private fun evaluateCandidate(
     zone: ZoneId,
     now: Instant,
     unchangedInstant: Instant? = null,
+    newInstallation: MeterInstallation? = null,
 ) : ReadingValidation {
     val others = tracker.readings.filter { it.id != id && it.installationId == installationId }
-    val dateError = validateReadingDate(tracker, id, date, today)
+    val dateError = if (newInstallation == null) {
+        validateReadingDate(tracker, id, date, today)
+    } else {
+        when {
+            date == null -> ReadingError.DATE_REQUIRED
+            date > today -> ReadingError.FUTURE_DATE
+            else -> null
+        }
+    }
     val value = (meter as? ParsedMeter.Value)?.cubicMetres
     val valueError = when {
         meter == ParsedMeter.Required -> ReadingError.VALUE_REQUIRED
@@ -114,5 +142,6 @@ private fun evaluateCandidate(
     return ReadingValidation.Accepted(
         Reading(id, checkNotNull(date), checkNotNull(value), checkNotNull(installationId), note?.takeUnless { it.isBlank() },
             checkNotNull(instant), zone),
+        newInstallation,
     )
 }

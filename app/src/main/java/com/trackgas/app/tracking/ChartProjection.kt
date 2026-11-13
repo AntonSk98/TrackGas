@@ -117,7 +117,6 @@ internal fun chartProjection(
             },
         )
     }
-    // Keep absolute coverage even when opening-only consumption has no eligible gas rate.
     val temperatureEntries = buckets.mapNotNull { bucket ->
         val offset = offsetOf(bucket.range)
         val range = if (period.type == PeriodType.YEAR) {

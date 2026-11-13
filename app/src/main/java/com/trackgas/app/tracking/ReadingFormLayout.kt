@@ -32,6 +32,7 @@ import com.trackgas.app.R
 internal fun ReadingFormLayout(
     editing: Boolean,
     displayedDate: String,
+    valueLabel: Int,
     value: String,
     displayedTime: String,
     timezone: String,
@@ -104,7 +105,7 @@ internal fun ReadingFormLayout(
                     onValueChange = onValueChange,
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !pending,
-                    label = { Text(stringResource(R.string.value_label)) },
+                    label = { Text(stringResource(valueLabel)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     isError = errors.value != null,

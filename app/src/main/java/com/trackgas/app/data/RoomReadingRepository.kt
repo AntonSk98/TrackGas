@@ -57,6 +57,9 @@ class RoomReadingRepository internal constructor(
                     is ReadingValidation.Rejected -> return@withTransaction SaveRows.Invalid(validation.errors)
                 }
                 if (intent is SaveReadingIntent.Add) {
+                    (validation as ReadingValidation.Accepted).createdInstallation?.let { installation ->
+                        dao.insertInstallation(InstallationEntity(installation.id, installation.startDate?.toString()))
+                    }
                     dao.insert(candidate.toEntity())
                 } else {
                     check(dao.update(candidate.toEntity()) == 1) { "Reading disappeared during update" }
@@ -79,12 +82,15 @@ class RoomReadingRepository internal constructor(
         ordering.withLock {
             val result = database.withTransaction {
                 val tracker = readRows()
-                when (val validation = evaluateReplacement(tracker, intent, newIdentity())) {
+                val installationId = newIdentity()
+                when (val validation = evaluateReplacement(tracker, intent, installationId)) {
                     is ReplacementValidation.Rejected -> ReplaceRows.Rejected(validation.error)
                     is ReplacementValidation.Accepted -> {
                         val next = validation.tracker
-                        val installation = next.installations.last()
+                        val installation = next.installations.single { it.id == installationId }
+                        val startingReading = next.readings.single { it.installationId == installationId }
                         dao.insertInstallation(InstallationEntity(installation.id, installation.startDate?.toString()))
+                        dao.insert(startingReading.toEntity())
                         ReplaceRows.Accepted(readRows())
                     }
                 }
@@ -182,10 +188,15 @@ class RoomReadingRepository internal constructor(
     override suspend fun delete(id: String): DeleteReadingResult = readingStorageOperation {
         ordering.withLock {
             val result = database.withTransaction {
-                when (evaluateDeletion(readRows(), id)) {
+                val tracker = readRows()
+                when (evaluateDeletion(tracker, id)) {
                     DeletionValidation.MISSING -> DeleteRows.Missing
                     DeletionValidation.ALLOWED -> {
+                        val deleted = tracker.readings.single { it.id == id }
                         check(dao.delete(id) == 1) { "Reading disappeared during delete" }
+                        if (tracker.readings.count { it.installationId == deleted.installationId } == 1) {
+                            dao.deleteInstallationsById(listOf(deleted.installationId))
+                        }
                         database.temperatures().pruneObsoleteIntervals()
                         DeleteRows.Accepted(readRows())
                     }
@@ -204,14 +215,9 @@ class RoomReadingRepository internal constructor(
     override suspend fun purge(): CommittedSnapshot = readingStorageOperation {
         ordering.withLock {
             val tracker = database.withTransaction {
-                val before = readRows()
-                // Restore one empty current installation after removing the full tracker.
                 dao.deleteReadings()
                 database.temperatures().deleteAll()
                 dao.deleteInstallations()
-                var id: String
-                do { id = UUID.randomUUID().toString() } while (before.installations.any { it.id == id })
-                dao.insertInstallation(InstallationEntity(id))
                 readRows()
             }
             mutationRevision++

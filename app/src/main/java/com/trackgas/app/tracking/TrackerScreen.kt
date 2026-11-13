@@ -62,7 +62,7 @@ fun TrackerScreen(
     onSave: (LocalDate?, String, Locale, String?, String, java.time.ZoneId) -> Unit,
     onDelete: () -> Unit,
     onOpenReplacement: () -> Unit = {},
-    onReplaceMeter: () -> Unit = {},
+    onReplaceMeter: (String, Locale) -> Unit = { _, _ -> },
     onOpenPurge: () -> Unit,
     onPurge: () -> Unit,
     onOpenMeterLocation: () -> Unit = {},
@@ -185,6 +185,7 @@ fun TrackerScreen(
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                             DropdownMenuItem(
                                 modifier = Modifier.padding(horizontal = 4.dp),
+                                enabled = mutationsEnabled && state.tracker.currentInstallation != null,
                                 text = {
                                     Text(
                                         stringResource(R.string.replace_meter),
@@ -291,7 +292,8 @@ fun TrackerScreen(
                 locale = locale,
                 loadState = state.loadState,
                 onRetryLoad = onRetryLoad,
-                onConfirm = onReplaceMeter,
+                onClearError = onClearDialogError,
+                onConfirm = { value -> onReplaceMeter(value, locale) },
                 onDismiss = onDismissDialog,
             )
         }

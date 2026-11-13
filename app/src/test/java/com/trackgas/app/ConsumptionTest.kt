@@ -166,15 +166,18 @@ class ConsumptionTest {
         assertEquals(listOf(28, 30), independentRates.keys.map { it.dayOfMonth })
         assertEquals(listOf(BigDecimal("5"), BigDecimal("3")), independentRates.values.toList())
         assertTrue(dailyConsumptionRates(replacement, period.navigate(-1)).isEmpty())
-        val openingOnly = replacement.copy(readings = replacement.readings.filter { it.installationId == "new" }.take(1))
-        assertEquals(BigDecimal("10"), dashboard(openingOnly, period).total.cubicMetres)
+        val openingOnly = replacement.copy(
+            readings = replacement.readings.filter { it.installationId == "new" }.take(1),
+            installations = listOf(MeterInstallation("new", LocalDate.of(2026, 10, 29))),
+        )
+        assertNull(dashboard(openingOnly, period).total.cubicMetres)
         assertTrue(dailyConsumptionRates(openingOnly, period).isEmpty())
 
         val oldFinal = reading(29, "1105")
         val mixed = replacement.copy(readings = replacement.readings.filterNot { it.id == "id-28" } + oldFinal)
         val mixedRates = dailyConsumptionRates(mixed, period)
         assertEquals(0, BigDecimal("2.5").compareTo(mixedRates.getValue(oldFinal.date)))
-        assertEquals(0, BigDecimal("12.5").compareTo(dashboard(mixed, period).buckets
+        assertEquals(0, BigDecimal("2.5").compareTo(dashboard(mixed, period).buckets
             .single { it.range.start == oldFinal.date }.amount.cubicMetres))
         assertEquals(0, BigDecimal("3").compareTo(mixedRates.getValue(reading(30, "0").date)))
     }

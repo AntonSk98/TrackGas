@@ -74,7 +74,7 @@ The interface SHALL keep tab, period, reading-management, and dialog actions rea
 - **THEN** its date and value are readable and localized, reading-specific click-to-edit and long-click-to-delete action labels are available
 
 ### Requirement: Meter-only History editing
-The History editor SHALL allow changes to the meter value and an optional note. It SHALL show the original localized date in a read-only field labelled "Date", without "Reading date", "Choose date", or a date picker. Save SHALL retain the reading's original date and identity. Add SHALL retain its existing date-selection behavior and SHALL NOT offer a note field.
+The History editor SHALL allow changes to the meter value and an optional note. It SHALL show the original localized date in a read-only field labelled "Date", without "Reading date", "Choose date", or a date picker. Save SHALL retain the reading's original date and identity. Add SHALL retain its existing date-selection behavior and SHALL NOT offer a note field. When no meter exists, Add SHALL identify the meter value as its starting value.
 
 #### Scenario: Consistent Add and Edit date presentation
 - **WHEN** the user opens Add or Edit
@@ -87,6 +87,10 @@ The History editor SHALL allow changes to the meter value and an optional note. 
 #### Scenario: Add retains its current form
 - **WHEN** the user opens Add
 - **THEN** the existing date and meter fields remain unchanged and no note field is shown
+
+#### Scenario: Identify a first meter's starting value
+- **WHEN** the user opens Add while no meter exists
+- **THEN** the meter-value field is labelled as the starting value and saving it creates the meter's baseline reading
 
 #### Scenario: Inspect the read-only date
 - **WHEN** the user taps the Date field in the History editor
@@ -195,19 +199,27 @@ Pending purge SHALL show progress, disable confirmation and cancellation, and bl
 - **THEN** the options action cannot start a purge, an existing purge confirmation cannot submit, and load retry does not delete data
 
 ### Requirement: Explicit meter replacement form
-Selecting Replace meter SHALL close the menu and open a modal showing today's read-only date. It SHALL explain that confirmation starts an independent, empty meter history on that date and require an explicit confirmation action. It SHALL NOT require a final old-meter reading or create a synthetic initial reading.
+When a meter exists, selecting Replace meter SHALL close the menu and open a minimal modal showing today's read-only date and a required starting-value field for the new meter. It SHALL NOT require a final old-meter reading or create a zero or other synthetic reading. When no meter exists, Replace meter SHALL be unavailable and Add SHALL remain available to create the first meter.
 
 #### Scenario: Confirm an automatic zero baseline
-- **WHEN** the user selects Replace meter and confirms
-- **THEN** a new empty meter history starts today, existing readings remain in their prior histories, and no synthetic baseline or linked reading is created
+- **WHEN** the user selects Replace meter, explicitly enters 0 as the starting value, and confirms
+- **THEN** the new meter stores the user-supplied zero as its first reading; no zero is created automatically and the value is not counted as consumption
 
 #### Scenario: Missing final reading
-- **WHEN** the current meter history has no reading and the user confirms
-- **THEN** the replacement succeeds without a final reading, fabricating a reading, or displaying a missing-final warning
+- **WHEN** the current meter has no reading today and the user confirms replacement with a valid starting value
+- **THEN** the replacement succeeds without fabricating a final reading for the previous meter
+
+#### Scenario: Confirm a supplied starting value
+- **WHEN** the user selects Replace meter, enters a valid nonzero starting value, and confirms
+- **THEN** a new meter and its first reading start today, existing readings remain in their prior meters, and the starting value is not counted as consumption
+
+#### Scenario: No meter exists
+- **WHEN** the tracker has no readings
+- **THEN** Replace meter is unavailable and Add can create the first meter with a starting value
 
 #### Scenario: Cancel replacement
 - **WHEN** the user cancels, presses Back, or taps outside a non-pending replacement form
-- **THEN** the replacement confirmation closes without creating an installation and existing readings remain unchanged
+- **THEN** the replacement confirmation closes without creating a meter or reading and existing readings remain unchanged
 
 #### Scenario: Storage errors
 - **WHEN** confirmation cannot commit
@@ -219,7 +231,7 @@ Selecting Replace meter SHALL close the menu and open a modal showing today's re
 
 #### Scenario: Shared visual and layout treatment
 - **WHEN** the replacement dialog is opened in landscape or at 200% font size
-- **THEN** its date, explanation, error feedback, and actions remain reachable using the existing light theme, localized formatting, scrolling, and system-inset behavior
+- **THEN** its date, starting-value field, error feedback, and actions remain reachable using the existing light theme, localized formatting, scrolling, and system-inset behavior
 
 ### Requirement: Application branding icon
 The app SHALL use a recognizable gas-tracking brand mark as its Android launcher icon and display that mark beside "TrackGas" in the shared in-app toolbar.

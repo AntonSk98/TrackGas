@@ -24,6 +24,14 @@ import androidx.compose.ui.unit.dp
 import com.trackgas.app.R
 import java.util.Locale
 
+internal fun meterStartingReadingIds(tracker: TrackerData): Set<String> =
+    tracker.installations.mapNotNull { installation ->
+        val startDate = installation.startDate ?: return@mapNotNull null
+        tracker.readings.firstOrNull {
+            it.installationId == installation.id && it.date == startDate
+        }?.id
+    }.toSet()
+
 /**
  * Builds the complete reading list in the supplied newest-first order.
  *
@@ -40,6 +48,7 @@ internal fun LazyListScope.historyItems(
     tracker: TrackerData = TrackerData(readings),
 ) {
     val estimates = history24HourEstimates(tracker)
+    val startingReadingIds = meterStartingReadingIds(tracker)
     val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
     val meterNumbers = installations.mapIndexed { index, installation -> installation.id to index + 1 }.toMap()
     val ordered = readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { meterNumbers[it.installationId] })
@@ -93,6 +102,19 @@ internal fun LazyListScope.historyItems(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(value, style = MaterialTheme.typography.headlineSmall)
+                if (reading.id in startingReadingIds) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Text(
+                            stringResource(R.string.history_starting_value),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
                 if (installations.size > 1) {
                     Text(meter, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

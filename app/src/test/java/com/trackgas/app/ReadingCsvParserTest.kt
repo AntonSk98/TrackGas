@@ -34,7 +34,7 @@ class ReadingCsvParserTest {
                 assertEquals(java.time.OffsetDateTime.parse(timestamp).toInstant(), row.observedAt)
                 assertEquals(java.time.OffsetDateTime.parse(timestamp).toLocalDate(), row.date)
                 val tracker = (validateCsvImportCandidate(
-                    TrackerData(installations = listOf(MeterInstallation(meter))), parsed.rows,
+                    TrackerData(), parsed.rows,
                 ) { "new" } as CsvImportCandidateValidation.Valid).tracker
                 assertEquals(csv, com.trackgas.app.tracking.readingCsv(tracker).toString(Charsets.UTF_8))
             } finally { java.util.TimeZone.setDefault(previous) }
@@ -70,14 +70,15 @@ class ReadingCsvParserTest {
         assertEquals("last", importedMeterRow.note)
         assertEquals(java.time.Instant.parse("2026-11-06T11:15:00Z"), importedMeterRow.observedAt)
         val retained = Reading("retained", java.time.LocalDate.parse("2026-10-01"), "10".toBigDecimal(), omitted)
-        val base = TrackerData(listOf(retained), listOf(MeterInstallation(meter), MeterInstallation(omitted)))
-        val imported = (validateCsvImportCandidate(base, parsed) { "new" } as CsvImportCandidateValidation.Valid).tracker
+        val base = TrackerData(listOf(retained), listOf(MeterInstallation(omitted)))
+        var id = 0
+        val imported = (validateCsvImportCandidate(base, parsed) { "new-${id++}" } as CsvImportCandidateValidation.Valid).tracker
         assertEquals(retained, imported.readings.first { it.installationId == omitted })
         assertEquals("2.00", imported.readings.first { it.installationId == meter }.cubicMetres.toPlainString())
         assertEquals(unknown, imported.installations.single { it.id == unknown }.id)
         assertEquals("new meter", imported.readings.single { it.installationId == unknown }.note)
         assertEquals(listOf(retained), base.readings)
-        assertEquals(listOf(MeterInstallation(meter), MeterInstallation(omitted)), base.installations)
+        assertEquals(listOf(MeterInstallation(omitted)), base.installations)
     }
     @Test fun parsesCurrentFiveColumnExample() {
         val text =
@@ -195,7 +196,7 @@ class ReadingCsvParserTest {
 
     @Test fun importCandidateKeepsOptionalNoteOnItsReading() {
         val meter = "11111111-1111-4111-8111-111111111111"
-        val base = TrackerData(installations = listOf(MeterInstallation(meter)))
+        val base = TrackerData()
         val row = testCsvRow(meter, java.time.LocalDate.parse("2026-10-28"), "1.2500".toBigDecimal(), 2, "read monthly")
 
         val result = validateCsvImportCandidate(base, listOf(row)) { "imported" } as CsvImportCandidateValidation.Valid
@@ -206,7 +207,7 @@ class ReadingCsvParserTest {
     @Test fun candidateValidationRejectsOverlappingIndependentMeterCoverage() {
         val first = "11111111-1111-4111-8111-111111111111"
         val second = "22222222-2222-4222-8222-222222222222"
-        val base = TrackerData(installations = listOf(MeterInstallation(first), MeterInstallation(second)))
+        val base = TrackerData()
         val start = java.time.LocalDate.parse("2026-10-01")
         val rows = listOf(
             testCsvRow(first, start, "100".toBigDecimal(), 2),
@@ -223,15 +224,14 @@ class ReadingCsvParserTest {
         assertEquals(CsvImportField.TIMESTAMP, error.field)
     }
 
-    @Test fun importingAnOlderKnownMeterKeepsTheNewEmptyInstallationCurrent() {
+    @Test fun importingAnOlderKnownMeterKeepsThePopulatedCurrentMeter() {
         val olderMeter = "11111111-1111-4111-8111-111111111111"
         val currentMeter = "22222222-2222-4222-8222-222222222222"
         val start = java.time.LocalDate.parse("2026-10-26")
+        val currentReading = Reading("current", start.plusDays(2), "25".toBigDecimal(), currentMeter)
         val base = TrackerData(
-            installations = listOf(
-                MeterInstallation(olderMeter),
-                MeterInstallation(currentMeter, start.plusDays(2)),
-            ),
+            readings = listOf(currentReading),
+            installations = listOf(MeterInstallation(currentMeter, start.plusDays(2))),
         )
         val rows = listOf(
             testCsvRow(olderMeter, start, "100".toBigDecimal(), 2),
@@ -242,8 +242,8 @@ class ReadingCsvParserTest {
         val result = validateCsvImportCandidate(base, rows) { "imported-${id++}" }
         assertTrue(result is CsvImportCandidateValidation.Valid)
         val imported = (result as CsvImportCandidateValidation.Valid).tracker
-        assertEquals(currentMeter, imported.currentInstallation.id)
-        assertTrue(imported.readings.none { it.installationId == currentMeter })
-        assertEquals(rows.map { it.installationId }.toSet(), imported.readings.map { it.installationId }.toSet())
+        assertEquals(currentMeter, imported.currentInstallation?.id)
+        assertEquals(currentReading, imported.readings.single { it.installationId == currentMeter })
+        assertEquals(setOf(olderMeter, currentMeter), imported.readings.map { it.installationId }.toSet())
     }
 }

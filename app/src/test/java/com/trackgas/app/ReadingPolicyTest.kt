@@ -41,7 +41,13 @@ class ReadingPolicyTest {
     @Test fun submissionDateRatherThanOpeningDateControlsFutureValidation() {
         val date = LocalDate.parse("2026-11-01")
         assertEquals(ReadingValidation.Rejected(ReadingErrors(date = ReadingError.FUTURE_DATE)), evaluateSave(emptyList(), add(date, "100", date.minusDays(1)), "new"))
-        assertEquals(ReadingValidation.Accepted(Reading("new", date, "100".toBigDecimal())), evaluateSave(emptyList(), add(date, "100", date), "new"))
+        assertEquals(
+            ReadingValidation.Accepted(
+                Reading("new", date, "100".toBigDecimal(), "new"),
+                MeterInstallation("new", date),
+            ),
+            evaluateSave(emptyList(), add(date, "100", date), "new"),
+        )
     }
 
     @Test fun editSavesAndClearsOptionalNotesWithoutChangingReadingIdentityOrDate() {

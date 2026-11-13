@@ -78,6 +78,23 @@ class ReadingValidationTest {
         assertNull(validateReadingDate(readings.filterNot { it.date == date }, null, date, today))
     }
 
+    @Test fun dateBeforeFirstMeterStartIsNotReportedAsDuplicate() {
+        val tracker = TrackerData(
+            readings = listOf(Reading("first", today, BigDecimal("100"), "meter")),
+            installations = listOf(MeterInstallation("meter", today)),
+        )
+        val earlierDate = today.minusDays(2)
+
+        assertEquals(
+            ReadingError.BEFORE_METER_START_DATE,
+            validateReadingDate(tracker, null, earlierDate, today),
+        )
+        assertEquals(
+            ReadingValidation.Rejected(ReadingErrors(date = ReadingError.BEFORE_METER_START_DATE)),
+            evaluateSave(tracker, testAdd(earlierDate, parseMeter("101", Locale.US), today), "earlier"),
+        )
+    }
+
     @Test fun validationVariantsCannotPairAcceptedCandidatesWithRejectionErrors() {
         val accepted = ReadingValidation.Accepted(readings[0])
         assertSame(readings[0], accepted.candidate)

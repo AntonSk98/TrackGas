@@ -25,8 +25,10 @@ internal fun readingCollectionViolation(readings: List<Reading>): ReadingCollect
 internal fun readingCollectionViolation(tracker: TrackerData): ReadingCollectionViolation? {
     readingCollectionViolation(tracker.readings)?.let { return it }
     val installations = tracker.installations.associateBy { it.id }
-    if (installations.isEmpty() || installations.size != tracker.installations.size ||
-        tracker.readings.any { it.installationId !in installations }
+    val readingInstallationIds = tracker.readings.map { it.installationId }.toSet()
+    if (installations.size != tracker.installations.size ||
+        tracker.readings.any { it.installationId !in installations } ||
+        tracker.installations.any { it.id !in readingInstallationIds }
     ) return ReadingCollectionViolation.INVALID_INSTALLATION
     if (hasOverlappingReadingCoverage(tracker.readings)) return ReadingCollectionViolation.OVERLAPPING_COVERAGE
     return null

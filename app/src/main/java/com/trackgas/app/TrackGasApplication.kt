@@ -36,7 +36,6 @@ class TrackGasApplication : Application() {
 
     private val database by lazy {
         Room.databaseBuilder(this, ReadingDatabase::class.java, "readings.db")
-            .addCallback(ReadingDatabase.INITIALIZE)
             .build()
     }
     val readingRepository: ReadingRepository by lazy { RoomReadingRepository(database) }

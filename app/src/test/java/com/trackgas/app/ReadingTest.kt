@@ -35,7 +35,7 @@ class ReadingTest {
         assertSame(tracker, snapshot.tracker)
         assertEquals(listOf("final", "initial"), snapshot.readings.map { it.id })
         assertEquals(listOf("1105.0000", "12.5000"), snapshot.readings.map { it.cubicMetres.toPlainString() })
-        assertEquals("new", tracker.currentInstallation.id)
+        assertEquals("new", tracker.currentInstallation?.id)
         assertEquals(initial.installationId, initial.copy(cubicMetres = BigDecimal("13")).installationId)
         assertThrows(IllegalArgumentException::class.java) { initial.copy(installationId = "") }
     }

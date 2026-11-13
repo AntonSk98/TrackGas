@@ -63,7 +63,7 @@
     <string name="purge_storage_error">Could not purge data. Try again.</string>
     <string name="confirm_replacement">Confirm replacement</string>
     <string name="replacing_meter">Replacing meter…</string>
-    <string name="replacement_explanation">Starts a new, empty meter history today.</string>
+    <string name="replacement_starting_value_invalid">Enter a valid, non-negative meter value.</string>
     <string name="replacement_storage_error">Could not replace meter. Try again.</string>
     <string name="replacement_already_replaced">Meter already replaced today.</string>
     <string name="replacement_obsolete">Readings changed. Reopen Replace meter.</string>
@@ -86,7 +86,7 @@
     <string name="saving_reading">Saving reading…</string>
     <string name="deleting_reading">Deleting reading…</string>
     <string name="retry">Retry</string>
-    <string name="no_consumption">Add at least two readings to see consumption for this period.</string>
+    <string name="no_consumption">Record another reading for the same meter to see consumption for this period.</string>
     <string name="consumption_total">Total consumption</string>
     <string name="chart_daily_title">Daily projection</string>
     <string name="chart_absolute_title">Interval consumption</string>
@@ -101,7 +101,8 @@
     <string name="history_24h_estimate_description">Estimated 24-hour consumption: %1$s cubic metres</string>
     <string name="chart_marker">%1$s\n%2$s</string>
     <string name="reading_history">Reading history</string>
-    <string name="no_readings">No readings yet. Add a reading to get started.</string>
+    <string name="no_readings">No readings yet. Add one to set your meter’s starting value.</string>
+    <string name="history_starting_value">Starting value</string>
     <string name="delete">Delete</string>
     <string name="edit_description">Edit reading from %1$s</string>
     <string name="delete_description">Delete reading from %1$s</string>
@@ -111,12 +112,14 @@
     <string name="date">Date</string>
     <string name="choose_date">Select reading date: %1$s</string>
     <string name="value_label">Meter reading (m³)</string>
+    <string name="starting_value">Starting value (m³)</string>
     <string name="reading_note_label">Note (optional)</string>
     <string name="save">Save</string>
     <string name="cancel">Cancel</string>
     <string name="confirm_date">OK</string>
     <string name="date_required">Choose a reading date.</string>
     <string name="future_date">The reading date cannot be in the future.</string>
+    <string name="before_meter_start_date">This date is before the meter’s start date.</string>
     <string name="duplicate_date">A reading already exists on this date.</string>
     <string name="value_required">Enter the cumulative meter reading.</string>
     <string name="invalid_number">Enter a decimal number without grouping separators.</string>

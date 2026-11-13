@@ -210,7 +210,7 @@ data class Dashboard(
 
 /**
  * Projects all source readings onto [period], including intervals crossing its boundaries.
- * A first reading on an installation's start date also contributes opening usage on that date.
+ * A meter's first reading is only a baseline and does not create consumption.
  *
  * Weekly/monthly periods use daily rows; yearly periods use monthly rows. Uncovered
  * buckets are omitted, while known zero and estimated allocations remain visible.
@@ -224,18 +224,7 @@ fun dashboard(readings: List<Reading>, period: CalendarPeriod): Dashboard =
 
 fun dashboard(tracker: TrackerData, period: CalendarPeriod): Dashboard {
     val intervals = readingIntervals(tracker)
-    val firstReadingByInstallation = tracker.readings.groupBy { it.installationId }
-        .mapValues { (_, readings) -> readings.minBy { it.date } }
-    val openingContributions = tracker.installations.mapNotNull { installation ->
-        val startDate = installation.startDate ?: return@mapNotNull null
-        val firstReading = firstReadingByInstallation[installation.id] ?: return@mapNotNull null
-        if (firstReading.date == startDate) {
-            ConsumptionContribution(DateRange(startDate, startDate), firstReading.cubicMetres, estimatedDistribution = false)
-        } else {
-            null
-        }
-    }
-    return dashboardFromContributions(intervals.map(ReadingInterval::asContribution) + openingContributions, period)
+    return dashboardFromContributions(intervals.map(ReadingInterval::asContribution), period)
 }
 
 private fun dashboardFromContributions(

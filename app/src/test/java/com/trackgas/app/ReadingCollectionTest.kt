@@ -13,6 +13,8 @@ class ReadingCollectionTest {
     @Test fun acceptsEmptyBaselineAndUnorderedEqualValuesWithoutChangingInputOrScale() {
         assertNull(readingCollectionViolation(emptyList()))
         assertNull(readingCollectionViolation(listOf(first)))
+        assertNull(readingCollectionViolation(TrackerData()))
+        assertNull(TrackerData().currentInstallation)
         assertTrue(readingIntervals(emptyList()).isEmpty())
         assertTrue(readingIntervals(listOf(first)).isEmpty())
 
@@ -60,16 +62,20 @@ class ReadingCollectionTest {
         assertEquals(2, intervals.size)
         assertTrue(intervals.all { it.earlier.installationId == it.later.installationId })
         assertEquals(listOf(oldLast.id, newLast.id), intervals.map { it.later.id })
-        assertEquals("new", tracker.currentInstallation.id)
+        assertEquals("new", tracker.currentInstallation?.id)
     }
 
-    @Test fun rejectsMissingInstallationsAndOverlappingMeterCoverage() {
+    @Test fun rejectsMissingInstallationsEmptyMetersAndOverlappingMeterCoverage() {
         val readings = listOf(first, last)
         val tracker = TrackerData(
             readings = readings,
             installations = listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID)),
         )
         assertNull(readingCollectionViolation(tracker))
+        assertEquals(
+            ReadingCollectionViolation.INVALID_INSTALLATION,
+            readingCollectionViolation(TrackerData(readings, emptyList())),
+        )
         val unknownMeter = tracker.copy(readings = readings + first.copy(id = "orphan", installationId = "missing"))
         assertEquals(ReadingCollectionViolation.INVALID_INSTALLATION, readingCollectionViolation(unknownMeter))
 
@@ -87,12 +93,14 @@ class ReadingCollectionTest {
         assertThrows(IllegalArgumentException::class.java) { readingIntervals(overlapping) }
     }
 
-    @Test fun newEmptyInstallationBecomesCurrentWithoutAReadingButLaterDatedDataWins() {
-        val newMeter = MeterInstallation("new", last.date.plusDays(1))
-        val tracker = TrackerData(listOf(first, last), listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), newMeter))
-        assertEquals(newMeter, tracker.currentInstallation)
-        val futureReading = last.copy(id = "future", date = newMeter.startDate!!.plusDays(1),
-            observedAt = last.observedAt.plusSeconds(2 * 86400))
-        assertEquals(ORIGINAL_INSTALLATION_ID, tracker.copy(readings = tracker.readings + futureReading).currentInstallation.id)
+    @Test fun latestNonemptyMeterIsCurrentAndEmptyMetersAreNeverCurrent() {
+        val newFirst = Reading("new-first", last.date.plusDays(1), "5".toBigDecimal(), "new")
+        val tracker = TrackerData(
+            listOf(first, last, newFirst),
+            listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", newFirst.date)),
+        )
+        assertEquals("new", tracker.currentInstallation?.id)
+        val oldOnly = tracker.copy(readings = listOf(first, last), installations = listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID)))
+        assertEquals(ORIGINAL_INSTALLATION_ID, oldOnly.currentInstallation?.id)
     }
 }

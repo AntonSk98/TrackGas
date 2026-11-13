@@ -114,7 +114,7 @@ interface ReadingRepository {
      */
     suspend fun delete(id: String): DeleteReadingResult
 
-    /** Atomically revalidates the current installation and starts an empty installation. */
+    /*    * Atomically revalidates the current installation and creates a new meter with its starting reading. */
     suspend fun replaceMeter(intent: ReplaceMeterIntent): ReplaceMeterResult
 
     /** Parses and validates an entire CSV against a consistent committed tracker snapshot. */
@@ -127,6 +127,6 @@ interface ReadingRepository {
         CsvImportError(CsvImportErrorCode.CSV_IMPORT_FAILED),
     )
 
-    /** Removes all tracking history atomically and returns an empty installation with a fresh identity. */
+    /** Removes all tracking history atomically and returns a tracker with no meters. */
     suspend fun purge(): CommittedSnapshot
 }

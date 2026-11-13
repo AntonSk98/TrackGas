@@ -16,7 +16,6 @@ import com.trackgas.app.temperature.TemperatureDao
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
-import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "installations")
@@ -129,12 +128,4 @@ data class StoredReadingDateRange(val startDate: String?, val endDate: String?)
 abstract class ReadingDatabase : RoomDatabase() {
     abstract fun readings(): ReadingDao
     abstract fun temperatures(): TemperatureDao
-
-    companion object {
-        val INITIALIZE = object : Callback() {
-            override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-                db.execSQL("INSERT INTO installations (id, startDate) VALUES (?, NULL)", arrayOf(UUID.randomUUID().toString()))
-            }
-        }
-    }
 }

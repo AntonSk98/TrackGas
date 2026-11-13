@@ -57,14 +57,14 @@ class HistoryProjectionTest {
         val last = observation("last", "2026-11-07T23:00", "1013")
         val opening = observation("opening", "2026-11-07T23:30", "5", "new")
         val next = observation("next", "2026-11-08T23:30", "7", "new")
-        val installations = listOf(
-            MeterInstallation(ORIGINAL_INSTALLATION_ID),
-            MeterInstallation("new", opening.date),
-        )
+        val installations = listOf(MeterInstallation("new", opening.date))
         assertTrue(history24HourEstimates(TrackerData()).isEmpty())
         assertTrue(history24HourEstimates(TrackerData(listOf(first))).isEmpty())
         assertTrue(history24HourEstimates(TrackerData(listOf(opening), installations)).isEmpty())
-        val tracker = TrackerData(listOf(next, last, opening, first), installations)
+        val tracker = TrackerData(
+            listOf(next, last, opening, first),
+            installations + MeterInstallation(ORIGINAL_INSTALLATION_ID),
+        )
         val estimates = history24HourEstimates(tracker)
         assertEquals(setOf(last.id, next.id), estimates.keys)
         assertEquals(0, BigDecimal("8").compareTo(estimates.getValue(last.id)))

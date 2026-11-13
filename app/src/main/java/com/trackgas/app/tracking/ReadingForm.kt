@@ -102,6 +102,11 @@ internal fun ReadingForm(
     ReadingFormLayout(
         editing = reading != null,
         displayedDate = dateText(reading?.date ?: date, locale),
+        valueLabel = if (reading == null && tracker.currentInstallation == null) {
+            R.string.starting_value
+        } else {
+            R.string.value_label
+        },
         value = draft.value,
         displayedTime = timeText(selectedTime, locale),
         timezone = draft.timezone,
@@ -295,6 +300,7 @@ internal fun DateError(error: ReadingError, modifier: Modifier = Modifier) {
 internal fun errorResource(error: ReadingError): Int = when (error) {
     ReadingError.DATE_REQUIRED -> R.string.date_required
     ReadingError.FUTURE_DATE -> R.string.future_date
+    ReadingError.BEFORE_METER_START_DATE -> R.string.before_meter_start_date
     ReadingError.DUPLICATE_DATE -> R.string.duplicate_date
     ReadingError.VALUE_REQUIRED -> R.string.value_required
     ReadingError.INVALID_NUMBER -> R.string.invalid_number

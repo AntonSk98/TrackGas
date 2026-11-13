@@ -12,9 +12,9 @@ data class MeterInstallation(val id: String, val startDate: LocalDate? = null) {
 /** A committed tracker owns stable lists; consumers must not mutate them after delivery. */
 data class TrackerData(
     val readings: List<Reading> = emptyList(),
-    val installations: List<MeterInstallation> = listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID)),
+    val installations: List<MeterInstallation> = readings.map { it.installationId }.distinct().map(::MeterInstallation),
 ) {
-    val currentInstallation: MeterInstallation
+    val currentInstallation: MeterInstallation?
         get() {
             val latestReadingByInstallation = readings.groupBy { it.installationId }
                 .mapValues { (_, meterReadings) -> meterReadings.maxOf { it.date } }
@@ -25,6 +25,22 @@ data class TrackerData(
                     .thenBy { it.startDate != null }
                     .thenBy { it.startDate }
                     .thenBy { it.id },
-            ) ?: error("Tracker must contain an installation")
+            )
         }
+}
+
+internal fun appendStartedMeter(
+    tracker: TrackerData,
+    installation: MeterInstallation,
+    startingReading: Reading,
+): TrackerData {
+    require(installation.startDate == startingReading.date)
+    require(installation.id == startingReading.installationId)
+    require(tracker.installations.none { it.id == installation.id })
+    val next = tracker.copy(
+        readings = tracker.readings + startingReading,
+        installations = tracker.installations + installation,
+    )
+    check(readingCollectionViolation(next) == null) { "A started meter must produce a valid tracker" }
+    return next
 }

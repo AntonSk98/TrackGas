@@ -63,7 +63,7 @@
     <string name="purge_storage_error">Die Daten konnten nicht gelöscht werden. Versuch es bitte erneut.</string>
     <string name="confirm_replacement">Zählerwechsel bestätigen</string>
     <string name="replacing_meter">Zähler wird gewechselt…</string>
-    <string name="replacement_explanation">Heute beginnt ein neuer, leerer Zählerverlauf.</string>
+    <string name="replacement_starting_value_invalid">Gib einen gültigen Zählerstand ohne Minuswert ein.</string>
     <string name="replacement_storage_error">Der Zähler konnte nicht gewechselt werden. Versuch es bitte erneut.</string>
     <string name="replacement_already_replaced">Der Zähler wurde heute bereits gewechselt.</string>
     <string name="replacement_obsolete">Die Zählerstände haben sich geändert. Öffne den Zählerwechsel erneut.</string>
@@ -86,7 +86,7 @@
     <string name="saving_reading">Zählerstand wird gespeichert…</string>
     <string name="deleting_reading">Zählerstand wird gelöscht…</string>
     <string name="retry">Versuch es erneut</string>
-    <string name="no_consumption">Füge mindestens zwei Zählerstände hinzu, um den Verbrauch für diesen Zeitraum zu sehen.</string>
+    <string name="no_consumption">Erfasse einen weiteren Zählerstand für denselben Zähler, um den Verbrauch für diesen Zeitraum zu sehen.</string>
     <string name="consumption_total">Gesamtverbrauch</string>
     <string name="chart_daily_title">Tagesprojektion</string>
     <string name="chart_absolute_title">Intervallverbrauch</string>
@@ -101,7 +101,8 @@
     <string name="history_24h_estimate_description">Geschätzter 24-Stunden-Verbrauch: %1$s Kubikmeter</string>
     <string name="chart_marker">%1$s\n%2$s</string>
     <string name="reading_history">Zählerverlauf</string>
-    <string name="no_readings">Es gibt noch keine Zählerstände. Füge einen hinzu.</string>
+    <string name="no_readings">Es gibt noch keine Zählerstände. Füge einen hinzu, um den Anfangswert festzulegen.</string>
+    <string name="history_starting_value">Anfangswert</string>
     <string name="delete">Löschen</string>
     <string name="edit_description">Zählerstand vom %1$s bearbeiten</string>
     <string name="delete_description">Zählerstand vom %1$s löschen</string>
@@ -111,12 +112,14 @@
     <string name="date">Datum</string>
     <string name="choose_date">Wähle ein Datum für den Zählerstand: %1$s</string>
     <string name="value_label">Zählerstand (m³)</string>
+    <string name="starting_value">Anfangswert (m³)</string>
     <string name="reading_note_label">Notiz (optional)</string>
     <string name="save">Speichern</string>
     <string name="cancel">Abbrechen</string>
     <string name="confirm_date">OK</string>
     <string name="date_required">Wähle ein Datum für den Zählerstand.</string>
     <string name="future_date">Das Datum des Zählerstands darf nicht in der Zukunft liegen.</string>
+    <string name="before_meter_start_date">Dieses Datum liegt vor dem Startdatum des Zählers.</string>
     <string name="duplicate_date">Für dieses Datum gibt es bereits einen Zählerstand.</string>
     <string name="value_required">Gib den kumulierten Zählerstand ein.</string>
     <string name="invalid_number">Gib eine Dezimalzahl ohne Tausendertrennzeichen ein.</string>

@@ -460,7 +460,7 @@ class TrackerViewModel(
     fun openReplacement() {
         if (state.loadState != ReadingLoadState.READY || state.dialog.pending) return
         val date = today()
-        val target = replacementTarget(state.tracker, date)
+        val target = replacementTarget(state.tracker, date) ?: return
         val phase = replacementTargetError(state.tracker, target, date)?.let { ReplacementPhase.Unavailable(it) }
             ?: ReplacementPhase.Ready
         open(ReadingDialog.Replacing(newId(), target, phase))
@@ -478,14 +478,23 @@ class TrackerViewModel(
         val dialog = state.dialog
         if (dialog is ReadingDialog.Editing && dialog.phase !is SavePhase.Pending) {
             state = state.copy(dialog = dialog.copy(phase = SavePhase.Ready))
+        } else if (dialog is ReadingDialog.Replacing &&
+            dialog.phase == ReplacementPhase.Unavailable(ReplacementError.INVALID_STARTING_READING)
+        ) {
+            state = state.copy(dialog = dialog.copy(phase = ReplacementPhase.Ready))
         }
     }
 
-    fun replaceMeter() {
+    fun replaceMeter(input: String, locale: Locale) {
         val dialog = state.dialog as? ReadingDialog.Replacing ?: return
         if (state.loadState != ReadingLoadState.READY || dialog.pending || dialog.phase is ReplacementPhase.Unavailable) return
         val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
-        val intent = ReplaceMeterIntent(dialog.target, today())
+        val observedAt = currentInstant().truncatedTo(ChronoUnit.MINUTES)
+        val zone = currentZone()
+        val intent = ReplaceMeterIntent(
+            dialog.target, today(), parseMeter(input, locale),
+            observedAt.atZone(zone).toLocalTime().toString(), zone, observedAt,
+        )
         state = state.copy(dialog = dialog.copy(phase = ReplacementPhase.Pending(request.requestId)))
         viewModelScope.launch {
             try {

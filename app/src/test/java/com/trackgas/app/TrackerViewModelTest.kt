@@ -12,6 +12,7 @@ import com.trackgas.app.temperature.TemperatureServices
 import com.trackgas.app.reminders.ReminderScheduler
 import com.trackgas.app.reminders.ReminderStore
 import com.trackgas.app.tracking.*
+import java.math.BigDecimal
 import java.time.LocalDate
 import java.io.ByteArrayInputStream
 import java.io.IOException
@@ -207,7 +208,7 @@ class TrackerViewModelTest {
 
     @Test fun csvImportSelectionPreviewAndConfirmationAreSingleSubmissionAndPublishCommit() = runTest {
         val meterId = "11111111-1111-4111-8111-111111111111"
-        val base = TrackerData(installations = listOf(MeterInstallation(meterId)))
+        val base = TrackerData()
         val imported = Reading("imported", today.minusDays(1), "100.2500".toBigDecimal(), meterId)
         val preview = CsvImportPreview(
             "preview", 1, listOf(CsvImportMeterChange(meterId, 0, 1)), 0, base,
@@ -345,7 +346,7 @@ class TrackerViewModelTest {
         val meterId = "11111111-1111-4111-8111-111111111111"
         val repo = ScriptedReadingRepository()
         val vm = TrackerViewModel(repo, ioDispatcher = dispatcher) { today }
-        repo.deliver(TrackerData(installations = listOf(MeterInstallation(meterId)))); runCurrent()
+        repo.deliver(TrackerData()); runCurrent()
         val before = vm.state.tracker
         val cancelled = requireNotNull(vm.requestCsvImport())
         vm.cancelCsvSelection(cancelled)
@@ -415,7 +416,7 @@ class TrackerViewModelTest {
         val pending = vm.state.dialog
         assertTrue(pending.pending)
         vm.purge(); vm.dismissDialog(); vm.openAdd(); vm.openEdit(one); vm.openDelete(one); vm.openReplacement()
-        vm.save(today, "100", Locale.US); vm.delete(); vm.replaceMeter()
+        vm.save(today, "100", Locale.US); vm.delete(); vm.replaceMeter("0", Locale.US)
         runCurrent()
         assertEquals(pending, vm.state.dialog)
         assertEquals(1, repo.purges)
@@ -717,7 +718,7 @@ class TrackerViewModelTest {
                 when (operation) {
                     "save" -> { vm.openEdit(two); vm.save(two.date, "113", Locale.US) }
                     "delete" -> { vm.openDelete(two); vm.delete() }
-                    "replace" -> { vm.openReplacement(); vm.replaceMeter() }
+                    "replace" -> { vm.openReplacement(); vm.replaceMeter("0", Locale.US) }
                     "purge" -> { vm.openPurge(); vm.purge() }
                     "import" -> {
                         val preview = CsvImportPreview(
@@ -745,7 +746,7 @@ class TrackerViewModelTest {
                     assertEquals(pending, vm.state)
                     vm.dismissDialog()
                     vm.save(two.date, "113", Locale.US)
-                    vm.delete(); vm.replaceMeter(); vm.purge(); vm.confirmCsvImport()
+                    vm.delete(); vm.replaceMeter("0", Locale.US); vm.purge(); vm.confirmCsvImport()
                     runCurrent()
                     assertEquals(pending, vm.state)
                     assertEquals(1, submissions())
@@ -1044,7 +1045,7 @@ class TrackerViewModelTest {
 
     @Test fun replacementCompletionRequiresMatchingSessionDialogAndRequest() {
         val request = ReadingRequest("session", "dialog", "request")
-        val dialog = ReadingDialog.Replacing("dialog", replacementTarget(TrackerData(listOf(two)), today), ReplacementPhase.Pending("request"))
+        val dialog = ReadingDialog.Replacing("dialog", requireNotNull(replacementTarget(TrackerData(listOf(two)), today)), ReplacementPhase.Pending("request"))
         assertEquals(ReadingDialog.Closed, dialog.completeReplacement(request, "session", null))
         for (stale in listOf(request.copy(sessionId = "old"), request.copy(dialogId = "old"), request.copy(requestId = "old"))) {
             assertSame(dialog, dialog.completeReplacement(stale, "session", ReplacementPhase.Unavailable(ReplacementError.OBSOLETE_TARGET)))
@@ -1059,9 +1060,34 @@ class TrackerViewModelTest {
         val tracker = TrackerData(listOf(one, two))
         return (evaluateReplacement(
             tracker,
-            ReplaceMeterIntent(replacementTarget(tracker, today), today),
+            ReplaceMeterIntent(
+                requireNotNull(replacementTarget(tracker, today)), today,
+                ParsedMeter.Value("0".toBigDecimal()),
+            ),
             "new",
         ) as ReplacementValidation.Accepted).tracker
+    }
+
+    @Test fun replacementUsesMinutePrecisionAcceptedByStartingReadingValidation() = runTest {
+        val repo = ScriptedReadingRepository()
+        val instant = java.time.Instant.parse("2026-10-26T12:34:56.789Z")
+        val vm = TrackerViewModel(
+            repo,
+            ioDispatcher = dispatcher,
+            currentInstant = { instant },
+            currentZone = { java.time.ZoneOffset.UTC },
+            currentDate = { today },
+        )
+        repo.deliver(listOf(one, two)); runCurrent()
+        vm.openReplacement()
+
+        vm.replaceMeter("100", Locale.US); runCurrent()
+
+        val intent = repo.replacements.single()
+        assertEquals(ParsedMeter.Value(BigDecimal("100")), intent.startingValue)
+        assertEquals("12:34", intent.time)
+        assertEquals(instant.truncatedTo(java.time.temporal.ChronoUnit.MINUTES), intent.now)
+        assertTrue(evaluateReplacement(vm.state.tracker, intent, "new") is ReplacementValidation.Accepted)
     }
 
     @Test fun pendingReplacementLocksEveryMutationAndUsesSubmissionDateWithoutRetargeting() = runTest {
@@ -1078,21 +1104,22 @@ class TrackerViewModelTest {
         assertEquals(listOf(one, two).sortedBy { it.id }, opened.target.expectedReadings)
         assertEquals(ReplacementPhase.Ready, opened.phase)
         date = today.plusDays(1)
-        vm.replaceMeter(); runCurrent()
+        vm.replaceMeter("0", Locale.US); runCurrent()
         val pending = vm.state.dialog
         vm.openAdd(); vm.openEdit(one); vm.openDelete(one); vm.openReplacement()
         vm.dismissDialog(); vm.clearDialogError()
-        vm.replaceMeter(); vm.save(date, "99", Locale.US); vm.delete(); runCurrent()
+        vm.replaceMeter("0", Locale.US); vm.save(date, "99", Locale.US); vm.delete(); runCurrent()
         assertEquals(pending, vm.state.dialog)
         assertEquals(1, repo.replacements.size)
         assertTrue(repo.saves.isEmpty()); assertTrue(repo.deletes.isEmpty())
         val intent = repo.replacements.single()
         assertEquals(opened.target, intent.target)
         assertEquals(today.plusDays(1), intent.today)
+        assertEquals(ParsedMeter.Value(BigDecimal.ZERO), intent.startingValue)
         repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Rejected(ReplacementError.STALE_DATE))); runCurrent()
         assertEquals(opened.copy(phase = ReplacementPhase.Unavailable(ReplacementError.STALE_DATE)), vm.state.dialog)
         vm.clearDialogError()
-        vm.replaceMeter(); runCurrent()
+        vm.replaceMeter("0", Locale.US); runCurrent()
         assertEquals(1, repo.replacements.size)
         assertSame(before.dashboard, vm.state.dashboard)
         assertEquals(before.period, vm.state.period); assertEquals(before.tab, vm.state.tab)
@@ -1107,14 +1134,14 @@ class TrackerViewModelTest {
         vm.openReplacement()
         assertEquals(ReplacementPhase.Ready, (vm.state.dialog as ReadingDialog.Replacing).phase)
         val tracker = TrackerData(
-            readings = listOf(one),
+            readings = listOf(one, Reading("new-start", today, BigDecimal("25"), "new")),
             installations = listOf(MeterInstallation(ORIGINAL_INSTALLATION_ID), MeterInstallation("new", today)),
         )
         repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Replaced(CommittedSnapshot(2, tracker))))
-        vm.replaceMeter(); runCurrent()
+        vm.replaceMeter("25", Locale.US); runCurrent()
         assertEquals(ReadingDialog.Closed, vm.state.dialog)
-        assertEquals(listOf(one), vm.state.readings)
-        assertEquals("new", vm.state.tracker.currentInstallation.id)
+        assertEquals(tracker.readings.sortedByDescending { it.date }, vm.state.readings)
+        assertEquals("new", vm.state.tracker.currentInstallation?.id)
         assertEquals(1, repo.replacements.size)
         repo.deliver(tracker, 3); runCurrent()
         vm.openReplacement()
@@ -1129,11 +1156,11 @@ class TrackerViewModelTest {
         val opened = vm.state.dialog as ReadingDialog.Replacing
         val before = vm.state
         repo.replacementOutcomes.send(Result.failure(ReadingStorageException(java.io.IOException("private"))))
-        vm.replaceMeter(); runCurrent()
+        vm.replaceMeter("0", Locale.US); runCurrent()
         assertEquals(opened.copy(phase = ReplacementPhase.Failed(ReadingFailure(ReadingFailureCategory.STORAGE_ACCESS, ReadingAction.REPLACE))), vm.state.dialog)
         assertSame(before.dashboard, vm.state.dashboard)
         repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Rejected(ReplacementError.OBSOLETE_TARGET)))
-        vm.replaceMeter(); runCurrent()
+        vm.replaceMeter("0", Locale.US); runCurrent()
         assertEquals(opened.copy(phase = ReplacementPhase.Unavailable(ReplacementError.OBSOLETE_TARGET)), vm.state.dialog)
         assertEquals(before.tracker, vm.state.tracker)
     }
@@ -1153,7 +1180,7 @@ class TrackerViewModelTest {
             repo.deliver(listOf(one, two)); runCurrent()
             vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH); vm.navigate(-1)
             val period = vm.state.period
-            vm.openReplacement(); vm.replaceMeter(); runCurrent()
+            vm.openReplacement(); vm.replaceMeter("0", Locale.US); runCurrent()
             if (failureBefore) { repo.failObservation(); runCurrent() }
             val committed = replaced()
             repo.replacementOutcomes.send(Result.success(ReplaceMeterResult.Replaced(CommittedSnapshot(3, committed)))); runCurrent()
@@ -1180,7 +1207,7 @@ class TrackerViewModelTest {
         repo.deliver(tracker); runCurrent()
         vm.selectTab(TrackerTab.HISTORY); vm.selectPeriod(PeriodType.MONTH)
         val before = vm.state
-        assertEquals(listOf(two.id, one.id), vm.state.readings.map { it.id })
+        assertEquals(listOf("new-start", two.id, one.id), vm.state.readings.map { it.id })
         val metadataChange = tracker.copy(installations = tracker.installations.map {
             if (it.id == "new") it.copy(startDate = today.minusDays(1)) else it
         })
@@ -1198,8 +1225,8 @@ class TrackerViewModelTest {
         val empty = TrackerData()
         repo.deliver(empty, 4); runCurrent()
         val originalProjection = vm.state.dashboard
-        repo.deliver(empty.copy(installations = listOf(MeterInstallation("different-original"))), 5); runCurrent()
-        assertNotSame(originalProjection, vm.state.dashboard)
+        repo.deliver(empty.copy(readings = empty.readings.reversed(), installations = empty.installations.reversed()), 5); runCurrent()
+        assertSame(originalProjection, vm.state.dashboard)
     }
 
     @Test fun readingsFromReplacedMetersRemainIndividuallyDeletable() = runTest {
@@ -1214,7 +1241,7 @@ class TrackerViewModelTest {
         )))
         vm.delete(); runCurrent()
         assertEquals(listOf(two.id), repo.deletes)
-        assertEquals(listOf(one), vm.state.readings)
+        assertEquals(tracker.readings.filterNot { it.id == two.id }.sortedByDescending { it.date }, vm.state.readings)
         assertEquals(ReadingDialog.Closed, vm.state.dialog)
     }
 }

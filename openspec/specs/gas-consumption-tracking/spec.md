@@ -50,14 +50,18 @@ The dashboard SHALL initially select the current Monday-to-Sunday week in the de
 - **THEN** its heading identifies both years, while the individual daily labels remain weekdays
 
 ### Requirement: Empty and partially covered consumption
-The dashboard SHALL show no consumption total or series when neither a reading interval nor replacement-start opening consumption overlaps the selected period, without sample values or invented totals. A lone reading SHALL establish only a baseline unless it is the first reading on a replacement installation's start date. Uncovered dates SHALL remain unknown internally, not zero or extrapolated. Totals SHALL sum available covered dates only. The empty state SHALL use concise localized text prompting the user to add at least two readings.
+The dashboard SHALL show consumption only for dates covered by intervals between consecutive readings of the same meter. A meter's first reading is a baseline and SHALL NOT itself contribute consumption. Uncovered dates SHALL remain unknown internally, not zero or extrapolated. Totals SHALL sum covered usage only. The empty state SHALL use concise localized text prompting the user to add another reading when a baseline exists.
 
 #### Scenario: No readings or only a baseline
-- **WHEN** there are no readings, or only one reading
-- **THEN** no consumption total or series is displayed, the concise empty state and add action remain available on Dashboard, period controls remain available, and any existing reading remains available in History
+- **WHEN** there are no readings or the tracker has only meter starting values
+- **THEN** no consumption total or series is displayed, the empty state and add action remain available, and every reading remains available in History
+
+#### Scenario: Starting value on a replacement date
+- **WHEN** a new meter starts with a nonzero reading on its replacement date
+- **THEN** that starting value contributes no consumption on that date
 
 #### Scenario: No coverage in the selected period
-- **WHEN** the user navigates to a period outside all recorded reading intervals
+- **WHEN** the user navigates to a period outside all recorded intervals
 - **THEN** consumption content is empty and the empty state is shown without implying that existing readings elsewhere cover the selected period
 
 ### Requirement: Covered consumption rows
@@ -91,9 +95,25 @@ Consumption content SHALL show dates or months, absolute cubic-metre list values
 - **THEN** consumption content is empty even if readings exist elsewhere
 
 ### Requirement: Create a dated cumulative reading
-The app SHALL provide an accessible add icon in the top-right toolbar. Its form SHALL request a date, observation time, and cumulative meter reading in cubic metres, with the current device-local date and time selected initially and an earlier date/time selectable. The Add form SHALL NOT offer a note field. Saving valid input SHALL add a reading and refresh consumption; cancelling SHALL leave readings unchanged.
+The app SHALL provide an accessible add icon in the top-right toolbar. Its form SHALL request a date, observation time, and non-negative cumulative meter reading in cubic metres, with the current device-local date and time selected initially and an earlier date/time selectable. When no meter exists, saving SHALL create a meter and save the reading as its starting value; that value SHALL establish the baseline and SHALL NOT contribute consumption. The Add form SHALL NOT offer a note field. Cancelling SHALL leave readings unchanged.
 
-#### Scenario: Save a backdated reading
+#### Scenario: Save the first reading
+- **WHEN** the user saves a valid reading while no meter exists
+- **THEN** a meter and its starting reading are committed together, and no consumption is attributed to the starting value
+
+#### Scenario: Add after a starting value
+- **WHEN** a meter starts at 1250 on October 1 and the user records 1254 on October 2
+- **THEN** October 2 has 4 cubic metres of consumption
+
+#### Scenario: Save a backdated first reading
+- **WHEN** the user creates the first meter with a valid reading dated before today
+- **THEN** that date and value establish the meter's starting baseline without invented consumption
+
+#### Scenario: Add before the meter's start date
+- **WHEN** the user selects a date before the first reading that established the meter
+- **THEN** the reading is rejected with a message that the date is before the meter's start date, not that a reading already exists
+
+#### Scenario: Add a backdated reading
 - **WHEN** the user opens Add, selects an earlier valid date and observation time, enters a valid meter value, and saves
 - **THEN** the reading appears with that date, time, and value and the dashboard recalculates without resetting the selected period
 
@@ -153,7 +173,11 @@ The app SHALL allow one reading per date per installation, today or earlier, wit
 - **THEN** it is accepted if that installation has no reading on the date and is validated only against that installation
 
 ### Requirement: Edit and delete reading history
-The app SHALL expose all readings newest first, independently of dashboard period selection. Edit SHALL preserve the reading's date, identity, and installation, allow observation-time and meter-value correction, and allow an optional note to be added, changed, or cleared. Add SHALL NOT offer notes. Every reading SHALL be individually deletable after confirmation; deletion SHALL recalculate consumption only within its own installation.
+The app SHALL expose all readings newest first, independently of dashboard period selection. History SHALL visually distinguish a reading recorded as its meter's starting value from regular readings. Edit SHALL preserve a reading's date, identity, and meter, allow observation-time and meter-value correction, and allow an optional note to be added, changed, or cleared. Add SHALL NOT offer notes. Delete SHALL require confirmation. Deleting a meter's last reading SHALL also remove that meter; deleting a reading while others remain SHALL recalculate consumption only within its meter.
+
+#### Scenario: Distinguish meter starting values in History
+- **WHEN** a History entry is the starting reading recorded when its meter was created
+- **THEN** it has a distinct localized visual marker from regular readings
 
 #### Scenario: Edit date and value
 - **WHEN** the user edits a reading, changes its valid meter value or observation time, enters a note, and saves
@@ -169,7 +193,19 @@ The app SHALL expose all readings newest first, independently of dashboard perio
 
 #### Scenario: Delete a reading from an independent history
 - **WHEN** the user confirms deletion of any reading, including one created before or after a meter replacement
-- **THEN** that reading is removed, other installations remain unchanged, and same-installation consumption is recalculated
+- **THEN** that reading is removed, other meters remain unchanged, and same-meter consumption is recalculated
+
+#### Scenario: Delete a reading while other meter readings remain
+- **WHEN** the user confirms deletion of a reading and another reading remains in that meter
+- **THEN** only the selected reading is removed, other meters remain unchanged, and same-meter consumption is recalculated
+
+#### Scenario: Delete the last reading of a meter
+- **WHEN** the user confirms deletion of a meter's only remaining reading
+- **THEN** the reading and its meter are removed atomically, with no empty meter left behind
+
+#### Scenario: Delete the last reading in the tracker
+- **WHEN** the user deletes the final reading across all meters
+- **THEN** History is empty, the tracker has no meters, and a later Add creates a new meter with its starting value
 
 ### Requirement: Reading mutation completion
 Delete SHALL require confirmation. Successful edits and deletions SHALL refresh History and consumption immediately; cancelling SHALL leave data unchanged.
@@ -184,14 +220,18 @@ Delete SHALL require confirmation. Successful edits and deletions SHALL refresh 
 
 #### Scenario: Confirm or cancel deletion
 - **WHEN** the user selects Delete for a reading
-- **THEN** cancelling preserves it and confirming removes it and recalculates consecutive intervals in that installation
+- **THEN** cancelling preserves it and confirming removes it and recalculates consumption for its meter
 
 #### Scenario: Remove the last usable interval
 - **WHEN** deletion leaves fewer than two readings in an installation
 - **THEN** that installation contributes no consumption interval while any remaining reading remains manageable and other installations remain unaffected
 
+#### Scenario: Remove a meter's last reading
+- **WHEN** deletion removes a meter's last reading
+- **THEN** the reading and meter disappear together from the committed tracker
+
 ### Requirement: Consumption from chronological intervals
-Consumption SHALL equal the later cumulative reading minus the earlier reading for every consecutive pair within the same installation sorted by date, irrespective of entry order. An interval SHALL cover dates after its earlier reading through its later reading, inclusive. Its first date SHALL be excluded, preventing double counting at shared endpoints. The first reading on a replacement installation's start date SHALL also contribute its cumulative value on that date as opening consumption, without persisting or exporting a synthetic reading. This amount SHALL be added to any other meter's consumption for that date. Different installations SHALL never form an interval.
+Consumption SHALL equal the later cumulative reading minus the earlier reading for every consecutive pair within the same meter sorted by date, irrespective of entry order. An interval SHALL cover dates after its earlier reading through its later date, inclusive. Its first date SHALL be excluded, preventing double counting at shared endpoints. A meter's first reading is only a baseline and SHALL NOT create consumption. Different meters SHALL never form an interval.
 
 #### Scenario: Consecutive days
 - **WHEN** readings are 1000 on October 1 and 1004 on October 2 in the same installation
@@ -203,15 +243,23 @@ Consumption SHALL equal the later cumulative reading minus the earlier reading f
 
 #### Scenario: First new-meter reading on replacement date
 - **WHEN** the old meter has readings of 45 on November 6 and 50 on November 7, replacement starts on November 7, and the new meter's first reading that day is 25
-- **THEN** November 7 consumption is 30 cubic metres (the old meter's 5 plus the new meter's opening 25), with no interval created between installations
+- **THEN** November 7 includes the old meter's 5 cubic metres but does not count the new meter's starting value of 25, with no interval created between meters
+
+#### Scenario: First meter starting value
+- **WHEN** the first meter starts at 25 on October 1 and the next reading is 28 on October 2
+- **THEN** October 1 has no consumption from the starting value and October 2 has 3 cubic metres
+
+#### Scenario: Usage after a replacement baseline
+- **WHEN** a replacement meter starts at 25 on November 7 and reads 28 on November 8
+- **THEN** November 8 has 3 cubic metres of new-meter consumption, with no interval between meters
 
 #### Scenario: First reading after the replacement date remains a baseline
-- **WHEN** a new installation's first reading is dated after its start date and there is no later reading
+- **WHEN** a meter's first reading is dated after its start date and there is no later reading
 - **THEN** it establishes a baseline only and contributes no consumption interval
 
 #### Scenario: Replacement-day opening usage and skipped new-meter days
 - **WHEN** the new installation starts on October 28 and its first reading is 6 that day, followed by 12 on October 31
-- **THEN** 6 cubic metres contribute on October 28 and the actual 6-to-12 interval contributes 2 cubic metres per day on October 29, 30, and 31, without persisting a synthetic zero reading
+- **THEN** the starting value contributes no consumption on October 28 and the 6-to-12 interval contributes 2 cubic metres per day on October 29, 30, and 31
 
 ### Requirement: Skipped-day allocation and provenance
 For a gap of N calendar days, the app SHALL allocate the measured interval total evenly across those N days. Multi-day allocations SHALL retain estimated-distribution metadata internally, distinct from single-day measured differences. No usage SHALL be extrapolated beyond available reading intervals. Distribution labels and explanations SHALL NOT be displayed on the dashboard.
@@ -433,7 +481,7 @@ Configuration restoration SHALL retain the matching draft or confirmation; succe
 - **THEN** no completed or previous-session draft, confirmation, or pending action reappears
 
 ### Requirement: Atomic final reading validation
-Final saving SHALL resolve the target, preserve an edit's identity and original date, validate uniqueness and chronological neighbours against the latest committed readings, and write atomically. Locale-aware parsing SHALL retain current decimal precision, accepted input, and field-error semantics. Picker feedback SHALL remain advisory and SHALL NOT replace final transactional validation.
+Final saving SHALL resolve the target, preserve an edit's identity and original date, validate uniqueness and chronological neighbours against the latest committed readings, and write atomically. When no meter exists, the first valid Add SHALL atomically create both its meter and starting reading. Locale-aware parsing SHALL retain current decimal precision, accepted input, and field-error semantics. Picker feedback SHALL remain advisory and SHALL NOT replace final transactional validation.
 
 #### Scenario: Competing saves use the latest neighbours
 - **WHEN** two saves race for the same date or for values that cannot both fit chronological order
@@ -446,6 +494,10 @@ Final saving SHALL resolve the target, preserve an edit's identity and original 
 #### Scenario: Ignore a supplied replacement edit date
 - **WHEN** an edit submission supplies a date different from its persisted target
 - **THEN** validation and saving use the original persisted date and identity, or report a missing target if it no longer exists
+
+#### Scenario: Concurrent first readings
+- **WHEN** two sessions attempt to create the first meter while no readings exist
+- **THEN** transactions serialize against the latest tracker, creating at most one initial meter and leaving no orphan meter or partial reading
 
 ### Requirement: Ordered committed tracker snapshots
 History and consumption SHALL derive from the same committed snapshot of readings and installations. Mutation success SHALL follow commit and make its committed state available immediately without resetting tab or period. Delayed older observation SHALL NOT replace newer accepted data. Repeated delivery of identical tracker data SHALL NOT produce a second data-driven projection or reset chart inspection; installation changes SHALL count as data changes.
@@ -474,7 +526,7 @@ An observation failure SHALL preserve the last accepted committed data and any a
 - **THEN** the dialog contents remain intact, submission stays blocked during loading, and successful observation re-enables eligible actions without resubmitting them
 
 ### Requirement: Classified local reading failures
-Expected storage-access and invalid stored-data failures SHALL have distinct privacy-safe categories with generic errors and non-destructive retry. Persisted readings and installations SHALL be validated before publication or mutation. Cancellation and unrelated defects SHALL propagate unchanged. Failure handling SHALL NOT transmit diagnostics or delete, repair, or expose reading data.
+Expected storage-access and invalid stored-data failures SHALL have distinct privacy-safe categories with generic errors and non-destructive retry. Persisted readings and meters SHALL be validated before publication or mutation. An empty tracker with no readings and no meters SHALL be valid. Cancellation and unrelated defects SHALL propagate unchanged. Failure handling SHALL NOT transmit diagnostics or delete, repair, or expose reading data.
 
 #### Scenario: Malformed stored reading
 - **WHEN** a persisted identity, date, or decimal value cannot be decoded into a valid reading
@@ -485,7 +537,7 @@ Expected storage-access and invalid stored-data failures SHALL have distinct pri
 - **THEN** a storage-access category is retained, the existing retry behavior remains available, and drafts and previously committed data are preserved
 
 #### Scenario: Individually valid rows form an invalid collection
-- **WHEN** stored rows decode individually but cumulative values decrease within one installation, identity or installation/date uniqueness is violated, or no current installation can be determined
+- **WHEN** stored rows decode individually but cumulative values decrease within one meter, identity or meter/date uniqueness is violated, a reading references no meter, or a meter has no readings
 - **THEN** observation and mutation attempts report a stored-data category before publishing or writing, preserve the last accepted snapshot and any open draft or confirmation, and leave all stored rows unchanged
 
 #### Scenario: Retry an inconsistent stored collection
@@ -501,26 +553,34 @@ Expected storage-access and invalid stored-data failures SHALL have distinct pri
 - **THEN** only its category and action context are exposed, not raw meter input, readings, dates, identities, SQL arguments, or exception messages
 
 #### Scenario: Lower values across a valid replacement
-- **WHEN** stored readings decrease only between independent installations after a valid meter replacement
-- **THEN** the tracker loads normally because each installation is validated independently
+- **WHEN** stored readings decrease only between independent meters after a valid replacement
+- **THEN** the tracker loads normally because each meter is validated independently
 
 ### Requirement: Atomic replacement against current committed data
-Replacement SHALL atomically validate its expected current installation and date, create a new empty installation, and make it current. A stale or competing operation SHALL NOT retarget a replacement silently. Success SHALL be acknowledged only after commit, and failure SHALL preserve the confirmation and last committed tracker.
+Replacement SHALL atomically validate its expected current meter and date, save the supplied starting reading, and make the new meter current. A stale or competing operation SHALL NOT retarget a replacement silently. Success SHALL be acknowledged only after commit, and failure SHALL preserve the confirmation and last committed tracker.
+
+#### Scenario: Replacement creates a starting reading
+- **WHEN** the user confirms replacement with a valid starting value for today
+- **THEN** a new meter and its first reading commit together, the starting value is excluded from consumption, and the previous meter's readings remain unchanged
 
 #### Scenario: Partial storage failure
 - **WHEN** storage fails while confirming replacement
-- **THEN** no partial installation is retained, no current installation is lost, and the user can retry with the confirmation preserved
+- **THEN** no partial meter or reading is retained, no current meter is lost, and the user can retry with the confirmation preserved
 
 #### Scenario: Preserve an existing nonzero baseline
-- **WHEN** the current installation has a nonzero reading and a replacement is confirmed
-- **THEN** the old reading remains unchanged and no synthetic reading is created
+- **WHEN** the current meter has a nonzero reading and a replacement is confirmed with a new starting value
+- **THEN** the old reading remains unchanged and the new meter stores the user-supplied value as its baseline
 
 #### Scenario: Competing replacements
-- **WHEN** two tracker sessions confirm replacement for the same current installation and date
-- **THEN** at most one replacement commits and the other reports an obsolete target without creating another installation
+- **WHEN** two tracker sessions confirm replacement for the same current meter and date
+- **THEN** at most one replacement commits and the other reports an obsolete target without creating another meter
 
 #### Scenario: Final reading changed while form is open
-- **WHEN** another session changes readings or the current installation before replacement confirmation
+- **WHEN** another session changes the current meter or its readings before replacement confirmation
+- **THEN** the stale confirmation is rejected without writes and the user must review the current meter before confirming again
+
+#### Scenario: Meter changes while the form is open
+- **WHEN** another session changes the current meter or its readings before replacement confirmation
 - **THEN** the stale confirmation is rejected without writes and the user must review the current meter before confirming again
 
 #### Scenario: Observation failure after commit
@@ -528,7 +588,7 @@ Replacement SHALL atomically validate its expected current installation and date
 - **THEN** the committed replacement remains successful, its form closes, the last committed tracker is retained, and load retry does not resubmit replacement
 
 ### Requirement: Committed purge projections and durability
-Purge success SHALL be acknowledged only after commit and immediately supply a complete committed empty tracker to History and Dashboard, preserving the selected tab and period. Older observations SHALL NOT restore purged data. The reset SHALL survive process death and offline restart. A new first reading SHALL establish a baseline without constraints from erased history or invented consumption.
+Purge success SHALL be acknowledged only after commit and immediately supply a complete committed empty tracker with no readings or meters to History and Dashboard, preserving the selected tab and period. Older observations SHALL NOT restore purged data. The reset SHALL survive process death and offline restart. A new first reading SHALL establish a baseline without constraints from erased history or invented consumption.
 
 #### Scenario: Refresh both tabs after commit
 - **WHEN** purge commits while the user has selected History and a past dashboard period
@@ -540,18 +600,18 @@ Purge success SHALL be acknowledged only after commit and immediately supply a c
 
 #### Scenario: Restart after reset
 - **WHEN** the user restarts offline after committed purge
-- **THEN** all meter histories remain empty, one installation remains current, and Dashboard opens on the current week with no old confirmation
+- **THEN** no meters or readings remain, and Dashboard opens on the current week with no old confirmation
 
 #### Scenario: Begin again without historical constraints
 - **WHEN** the user adds a valid first reading on a previously used date with a value lower than an erased reading
-- **THEN** it is saved in the current installation and contributes only a baseline, while subsequent readings and replacements follow ordinary rules
+- **THEN** a new meter and starting reading are committed, contributing no consumption until a later reading is saved
 
 ### Requirement: Purge failure and lifecycle safety
 A failed purge SHALL leave all prior records unchanged and retain the confirmation for explicit retry. Rotation and same-process session restoration SHALL retain pending work without resubmitting it; completion SHALL affect only its matching dialog and request. Observation failure SHALL NOT turn a committed purge into a failed mutation. Load retry SHALL remain non-destructive, and purge SHALL NOT bypass invalid stored-data validation.
 
 #### Scenario: Roll back partial deletion
-- **WHEN** storage fails or cancellation occurs before the purge commits, including during restoration of the empty current installation
-- **THEN** all original readings and installations remain intact and no successful empty snapshot is issued; expected storage failures retain their classified retry behavior and cancellation propagates unchanged
+- **WHEN** storage fails or cancellation occurs before the purge commits
+- **THEN** all original readings and meters remain intact and no successful empty snapshot is issued; expected storage failures retain their classified retry behavior and cancellation propagates unchanged
 
 #### Scenario: Retain pending confirmation across recreation
 - **WHEN** a purge is pending and its activity rotates or is recreated within the same retained process session
@@ -618,46 +678,54 @@ Long-pressing a consumption bar SHALL show its date and consumption only. Long-p
 - **THEN** it shows their covered-date-weighted mean temperature beside consumption
 
 ### Requirement: Start replacement as an independent meter history
-Replacement SHALL take effect only after explicit confirmation for today's device-local date. It SHALL create a new empty current installation without requiring a final reading, creating a zero baseline, or linking readings across installations. At most one replacement SHALL be allowed per calendar date.
+Replacement SHALL take effect only after explicit confirmation for today's device-local date. It SHALL create a new meter with a persisted starting reading supplied by the user, without requiring a final reading for the previous meter or linking readings across meters. A replacement SHALL NOT be available when no meter exists; Add SHALL create the first meter instead.
 
 #### Scenario: Replace without a final reading
-- **WHEN** the user confirms replacement and today's old-meter reading is absent
-- **THEN** the new empty installation is created without changing or fabricating a reading in either history
+- **WHEN** the user confirms replacement with a valid starting value
+- **THEN** the new meter begins with that reading today and the previous meter's readings remain unchanged
 
 #### Scenario: Replace with existing readings
-- **WHEN** the current meter has readings and the user confirms replacement
-- **THEN** those readings remain unchanged in the old installation and the new installation has no initial reading
+- **WHEN** the current meter has readings and the user confirms replacement with a valid starting value
+- **THEN** those readings remain unchanged in the old meter and the new meter stores the supplied starting reading
+
+#### Scenario: Replace without a previous meter's reading today
+- **WHEN** the user confirms replacement and the previous meter has no reading for today
+- **THEN** the replacement succeeds without fabricating a final reading for the previous meter
 
 #### Scenario: First reading after replacement
 - **WHEN** the user adds the first reading after replacement
-- **THEN** it belongs to the new current installation and establishes only that meter's baseline
+- **THEN** it belongs to the new meter and its consumption is calculated from the saved starting value
 
 #### Scenario: Restart after replacement
 - **WHEN** the user restarts the app offline after confirming replacement
-- **THEN** the new empty installation remains current and the existing meter histories reload unchanged
+- **THEN** the new meter and its starting reading remain current and all existing meter histories reload unchanged
 
 #### Scenario: Multiple replacements over time
 - **WHEN** the user replaces a meter again on a later date
-- **THEN** another empty installation becomes current while all earlier installations and readings remain available
+- **THEN** another meter with its own starting reading is created while all earlier meters and readings remain available
 
 #### Scenario: Second replacement on the same day
 - **WHEN** a replacement is already committed for today and another replacement is requested
-- **THEN** the app explains that today's replacement already exists and creates no additional installation
+- **THEN** the app explains that today's replacement already exists and creates no additional meter
 
 #### Scenario: Date changes before confirmation
 - **WHEN** the device date changes after the form opens but before confirmation
 - **THEN** no replacement is committed under the stale date, the form explains that it must be reopened for the current date, and no existing reading is moved
 
+#### Scenario: No meter exists
+- **WHEN** the tracker has no readings and the user requests Replace meter
+- **THEN** replacement is unavailable and the user can create a meter with a starting value through Add
+
 ### Requirement: Confirmed reset of independent tracking data
-An explicitly confirmed purge SHALL atomically remove all readings and historical installations, leaving exactly one empty current installation. Purging an already empty tracker SHALL succeed with the same valid empty state.
+An explicitly confirmed purge SHALL atomically remove all readings and meters, leaving no current meter. Purging an already empty tracker SHALL succeed with the same valid empty state.
 
 #### Scenario: Purge successive meter installations
-- **WHEN** the user confirms purge with readings across multiple independent installations
-- **THEN** all readings and historical installations are removed together, exactly one empty installation remains current, and no partial tracker is published
+- **WHEN** the user confirms purge with readings across multiple independent meters
+- **THEN** all readings and meters are removed together and no partial tracker is published
 
 #### Scenario: Purge an empty tracker
-- **WHEN** the user confirms purge with no readings
-- **THEN** the operation completes normally and leaves exactly one empty current installation
+- **WHEN** the user confirms purge with no readings or meters
+- **THEN** the operation completes normally and leaves no meter
 
 ### Requirement: Attach optional notes when editing readings
 The Edit form SHALL provide an optional note field. A saved note SHALL be associated with its reading, preserved across app restarts, and available to History and CSV exchange. Empty notes SHALL be treated as absent.
