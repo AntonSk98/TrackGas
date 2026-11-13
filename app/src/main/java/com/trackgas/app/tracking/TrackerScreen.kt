@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -248,18 +249,11 @@ fun TrackerScreen(
     }
     val export = state.export
     if (export is ExportState.Complete && export.succeeded) {
-        ResponsiveDialog(onDismissRequest = { onAcknowledgeExport(export.requestId) }) {
-            ResponsiveDialogContent {
-                Box(modifier = Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
-                    Icon(
-                        painterResource(R.drawable.ic_success),
-                        contentDescription = stringResource(R.string.export_success),
-                        modifier = Modifier.size(48.dp).testTag("export-success-icon"),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-        }
+        AlertDialog(
+            onDismissRequest = { onAcknowledgeExport(export.requestId) },
+            confirmButton = {},
+            text = { Text(stringResource(R.string.export_success), style = MaterialTheme.typography.bodyLarge) },
+        )
     } else if (export is ExportState.Complete) {
         ResponsiveAlertDialog(
             onDismissRequest = { onAcknowledgeExport(export.requestId) },

@@ -73,7 +73,7 @@ On a fresh install, the first installation SHALL have a persistent UUID. Purge S
 - **THEN** the new empty tracker has a fresh first-installation UUID
 
 ### Requirement: Export completion and failure
-The app SHALL report success only after the complete file is written and closed. Cancelling destination selection SHALL leave tracking data unchanged and SHALL NOT report success. A write failure SHALL show a privacy-safe error and permit another export attempt without changing tracking data. Success SHALL appear in a dismissible window with a success icon and the localized text “Saved” / “Gespeichert,” without a confirmation button.
+The app SHALL report success only after the complete file is written and closed. Cancelling destination selection SHALL leave tracking data unchanged and SHALL NOT report success. A write failure SHALL show a privacy-safe error and permit another export attempt without changing tracking data. Success SHALL appear in a compact, dismissible window sized to its content that shows only the localized text “Saved” / “Gespeichert,” with no icon and no confirmation button.
 
 #### Scenario: Destination or write fails
 - **WHEN** the selected destination cannot be opened, written, or closed
@@ -85,7 +85,7 @@ The app SHALL report success only after the complete file is written and closed.
 
 #### Scenario: Successful export
 - **WHEN** the complete file has been written and closed
-- **THEN** a dismissible success window displays the success icon and “Saved” / “Gespeichert”
+- **THEN** a compact text-only “Saved” / “Gespeichert” window appears that does not span the full screen width, contains no icon, and can be dismissed
 
 #### Scenario: Rotation during export
 - **WHEN** the device rotates while destination selection or writing is in progress

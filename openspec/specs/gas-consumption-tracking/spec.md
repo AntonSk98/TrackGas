@@ -823,19 +823,19 @@ History estimates SHALL derive from the same committed tracker snapshot as their
 - **THEN** History retains its estimates from the last committed tracker snapshot
 
 ### Requirement: Chart-only consumption mode selection
-Dashboard SHALL offer daily-estimate and absolute consumption chart modes, defaulting to daily estimates in a fresh process. Mode changes SHALL affect only gas chart values, units, heading, and inspection, not absolute period totals, list amounts, History, temperatures, or selected dates. Selection SHALL survive tab changes, period navigation, committed data refreshes, and configuration changes without being stored as tracker data or exported.
+Dashboard SHALL offer daily-projection and absolute (interval) consumption chart modes, defaulting to absolute interval consumption in a fresh process. Mode changes SHALL affect only gas chart values, units, heading, and inspection, not absolute period totals, list amounts, History, temperatures, or selected dates. Selection SHALL survive tab changes, period navigation, committed data refreshes, and configuration changes without being stored as tracker data or exported.
 
 #### Scenario: Default and switch
-- **WHEN** a fresh process opens Dashboard and the user selects absolute mode
-- **THEN** the chart initially shows daily estimates and then absolute bucket amounts while the large period total and all list amounts remain unchanged
+- **WHEN** a fresh process opens Dashboard and the user selects daily-projection mode
+- **THEN** the chart initially shows absolute interval amounts and then daily projections while the large period total and all list amounts remain unchanged
 
 #### Scenario: Retain selection in the session
-- **WHEN** the user selects absolute mode, navigates periods, visits History, rotates, and receives committed reading or temperature updates
-- **THEN** absolute mode remains selected without resetting the tab or selected period
+- **WHEN** the user selects daily-projection mode, navigates periods, visits History, rotates, and receives committed reading or temperature updates
+- **THEN** daily-projection mode remains selected without resetting the tab or selected period
 
 #### Scenario: Fresh launch
 - **WHEN** the app process is terminated and a new process starts
-- **THEN** the chart starts in daily-estimate mode with the existing Dashboard and current-week defaults
+- **THEN** the chart starts in absolute mode with the existing Dashboard and current-week defaults
 
 ### Requirement: Timestamp-normalized daily chart values
 Daily-estimate mode SHALL use each consecutive same-installation pair's meter difference multiplied by 86,400 and divided by actual elapsed seconds. Its unrounded rate SHALL be projected onto each covered calendar date after the earlier reading through the later reading. Calculation SHALL preserve decimal precision, use absolute observation instants, and remain independent of calendar allocation of absolute consumption.
@@ -891,15 +891,19 @@ Daily estimates SHALL exist only on dates covered by actual consecutive same-ins
 - **THEN** its dates have identifiable, inspectable zero-rate marks and the adjacent dates have no marks
 
 ### Requirement: Localized accessible chart mode control
-The gas chart SHALL have a compact switch beside its heading: "Daily consumption" / "Tagesverbrauch" when enabled and "Consumption" / "Verbrauch" when disabled, without "24". The switch SHALL expose its label and mode accessibly in English and German. Daily axes SHALL use cubic metres per day; daily tooltips SHALL show only the approximation sign, value, and cubic metres without a per-day suffix. Controls SHALL remain usable on narrow screens and with enlarged text.
+The gas chart SHALL have a compact switch beside its heading: "Daily projection" / "Tagesprojektion" when enabled and "Interval consumption" / "Intervallverbrauch" when disabled. The switch SHALL expose its label and mode accessibly in English and German. Daily axes SHALL use cubic metres per day; daily tooltips SHALL show only the approximation sign, value, and cubic metres without a per-day suffix. Controls SHALL remain usable on narrow screens and with enlarged text.
 
 #### Scenario: German daily presentation
-- **WHEN** German Dashboard shows daily mode
-- **THEN** the chart heading is "Tagesverbrauch", its axis uses cubic metres per day, its tooltip shows an approximate cubic-metre value without "/Tag", and the adjacent switch is enabled and accessibly identifies daily mode
+- **WHEN** German Dashboard shows daily-projection mode
+- **THEN** the chart heading is "Tagesprojektion", its axis uses cubic metres per day, its tooltip shows an approximate cubic-metre value without "/Tag", and the adjacent switch is enabled and accessibly identifies daily mode
+
+#### Scenario: German absolute presentation
+- **WHEN** German Dashboard shows absolute mode
+- **THEN** the chart heading is "Intervallverbrauch" and the switch is disabled and accessibly identifies absolute mode
 
 #### Scenario: Absolute presentation
 - **WHEN** the user chooses absolute mode
-- **THEN** the heading becomes "Consumption" or "Verbrauch", the axis and tooltip use cubic metres rather than a rate, and the selector exposes absolute mode
+- **THEN** the heading becomes "Interval consumption" or "Intervallverbrauch", the axis and tooltip use cubic metres rather than a rate, and the selector exposes absolute mode
 
 #### Scenario: Separate the total from the chart
 - **WHEN** either chart mode is displayed

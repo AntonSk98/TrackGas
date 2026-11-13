@@ -50,10 +50,10 @@ class TrackerViewModelTest {
         val repo = ScriptedReadingRepository()
         val vm = TrackerViewModel(repo, ioDispatcher = dispatcher) { today }
         repo.deliver(listOf(one, two)); runCurrent()
-        assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
+        assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
         val before = vm.state
-        vm.selectChartMode(ConsumptionChartMode.ABSOLUTE)
-        assertEquals(before.copy(chartMode = ConsumptionChartMode.ABSOLUTE), vm.state)
+        vm.selectChartMode(ConsumptionChartMode.DAILY_ESTIMATE)
+        assertEquals(before.copy(chartMode = ConsumptionChartMode.DAILY_ESTIMATE), vm.state)
         assertTrue(repo.saves.isEmpty())
         assertTrue(repo.deletes.isEmpty())
         assertTrue(repo.replacements.isEmpty())
@@ -64,13 +64,13 @@ class TrackerViewModelTest {
         vm.selectPeriod(PeriodType.YEAR)
         vm.navigate(-1)
         assertNull(vm.state.dashboard.total.cubicMetres)
-        assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
+        assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
         vm.selectPeriod(PeriodType.MONTH)
         val period = vm.state.period
         val changed = two.copy(cubicMetres = "120".toBigDecimal())
         repo.deliver(listOf(one, changed), 2); runCurrent()
         assertEquals(dashboard(vm.state.tracker, period), vm.state.dashboard)
-        assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
+        assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
         assertEquals(TrackerTab.HISTORY, vm.state.tab)
         assertEquals(period, vm.state.period)
     }
@@ -104,7 +104,7 @@ class TrackerViewModelTest {
         runCurrent()
         assertEquals(0, "13".toBigDecimal().compareTo(rates().getValue(today)))
         assertEquals(absolute, vm.state.dashboard)
-        assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
+        assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
         assertEquals(ReadingDialog.Closed, vm.state.dialog)
     }
 
@@ -287,9 +287,9 @@ class TrackerViewModelTest {
         runCurrent()
         val beforeModeChange = vm.state
         val checksBeforeModeChange = checks.requests
-        vm.selectChartMode(ConsumptionChartMode.ABSOLUTE)
+        vm.selectChartMode(ConsumptionChartMode.DAILY_ESTIMATE)
         runCurrent()
-        assertEquals(beforeModeChange.copy(chartMode = ConsumptionChartMode.ABSOLUTE), vm.state)
+        assertEquals(beforeModeChange.copy(chartMode = ConsumptionChartMode.DAILY_ESTIMATE), vm.state)
         assertEquals(checksBeforeModeChange, checks.requests)
 
         vm.openAdd()
@@ -299,7 +299,7 @@ class TrackerViewModelTest {
         vm.save(today, "112.1250", Locale.US)
         runCurrent()
         assertEquals(2, checks.requests)
-        assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
+        assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
         assertFalse(dailyConsumptionRates(vm.state.tracker, vm.state.period).isEmpty())
         assertNotNull(reminderStore.lastSubmissionMillis())
         assertEquals(1, reminderScheduler.schedules)
@@ -312,7 +312,7 @@ class TrackerViewModelTest {
         vm.delete()
         runCurrent()
         assertEquals(3, checks.requests)
-        assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
+        assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
         assertTrue(dailyConsumptionRates(vm.state.tracker, vm.state.period).isEmpty())
 
         val preview = CsvImportPreview(
@@ -337,7 +337,7 @@ class TrackerViewModelTest {
         vm.confirmCsvImport()
         runCurrent()
         assertEquals(4, checks.requests)
-        assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
+        assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
         assertEquals(2, reminderScheduler.schedules)
     }
 
@@ -614,7 +614,7 @@ class TrackerViewModelTest {
             val vm = TrackerViewModel(repo) { today }
             repo.deliver(listOf(two, one)); runCurrent()
             vm.selectPeriod(PeriodType.MONTH)
-            vm.selectChartMode(ConsumptionChartMode.ABSOLUTE)
+            vm.selectChartMode(ConsumptionChartMode.DAILY_ESTIMATE)
             if (target is ReadingTarget.Add) vm.openAdd() else vm.openEdit(two)
             val dialog = vm.state.dialog as ReadingDialog.Editing
             val before = vm.state
@@ -625,7 +625,7 @@ class TrackerViewModelTest {
             assertSame(before.dashboard, vm.state.dashboard)
             assertEquals(history24HourEstimates(before.tracker), history24HourEstimates(vm.state.tracker))
             assertEquals(dailyConsumptionRates(before.tracker, before.period), dailyConsumptionRates(vm.state.tracker, vm.state.period))
-            assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
+            assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
             val changed = two.copy(cubicMetres = "115.2500".toBigDecimal())
             repo.saveOutcomes.send(Result.success(SaveReadingResult.Saved(CommittedSnapshot(2, listOf(changed, one)))))
             vm.save(today, "115.2500", Locale.US); runCurrent()
@@ -636,7 +636,7 @@ class TrackerViewModelTest {
             vm.openEdit(changed)
             vm.dismissDialog()
             assertEquals(estimates, history24HourEstimates(vm.state.tracker))
-            assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
+            assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
             vm.openDelete(changed)
             val deletion = vm.state.dialog as ReadingDialog.ConfirmingDeletion
             val projection = vm.state.dashboard
@@ -651,7 +651,7 @@ class TrackerViewModelTest {
             assertEquals(listOf(one), vm.state.readings)
             assertTrue(history24HourEstimates(vm.state.tracker).isEmpty())
             assertTrue(dailyConsumptionRates(vm.state.tracker, vm.state.period).isEmpty())
-            assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
+            assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, vm.state.chartMode)
         }
     }
 
@@ -791,8 +791,8 @@ class TrackerViewModelTest {
         try {
             val old = ViewModelProvider(store, factory)[TrackerViewModel::class.java]
             repo.deliver(listOf(two, one)); runCurrent()
-            assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, old.state.chartMode)
-            old.selectChartMode(ConsumptionChartMode.ABSOLUTE)
+            assertEquals(ConsumptionChartMode.ABSOLUTE, old.state.chartMode)
+            old.selectChartMode(ConsumptionChartMode.DAILY_ESTIMATE)
             old.navigate(-12); old.selectPeriod(PeriodType.MONTH)
             assertEquals(CalendarPeriod.containing(PeriodType.MONTH, old.today()), old.state.period)
             old.navigate(-1)
@@ -803,12 +803,12 @@ class TrackerViewModelTest {
                     assertEquals(selected.period, old.state.period)
                     assertSame(selected.dashboard, old.state.dashboard)
                     assertEquals(selected.readings, old.state.readings)
-                    assertEquals(ConsumptionChartMode.ABSOLUTE, old.state.chartMode)
+                    assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, old.state.chartMode)
                 }
             }
             old.selectTab(TrackerTab.HISTORY); old.openEdit(two)
             assertSame(old, ViewModelProvider(store, factory)[TrackerViewModel::class.java])
-            assertEquals(ConsumptionChartMode.ABSOLUTE, old.state.chartMode)
+            assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, old.state.chartMode)
             assertEquals(1, repo.subscriptions)
             val freshRepo = ScriptedReadingRepository()
             val fresh = TrackerViewModel(freshRepo) { today }
@@ -816,7 +816,7 @@ class TrackerViewModelTest {
             assertEquals(old.state.readings, fresh.state.readings)
             assertNotEquals(old.state.sessionId, fresh.state.sessionId)
             assertEquals(TrackerTab.DASHBOARD, fresh.state.tab)
-            assertEquals(ConsumptionChartMode.DAILY_ESTIMATE, fresh.state.chartMode)
+            assertEquals(ConsumptionChartMode.ABSOLUTE, fresh.state.chartMode)
             assertEquals(CalendarPeriod.containing(PeriodType.WEEK, today), fresh.state.period)
             assertEquals(ReadingDialog.Closed, fresh.state.dialog)
         } finally { store.clear() }

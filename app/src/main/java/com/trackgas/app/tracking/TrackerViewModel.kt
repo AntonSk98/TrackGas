@@ -90,7 +90,7 @@ data class TrackerState(
     val tracker: TrackerData = TrackerData(readings),
     val export: ExportState = ExportState.Idle,
     val csvImport: CsvImportState = CsvImportState.Idle,
-    val chartMode: ConsumptionChartMode = ConsumptionChartMode.DAILY_ESTIMATE,
+    val chartMode: ConsumptionChartMode = ConsumptionChartMode.ABSOLUTE,
 )
 
 /**

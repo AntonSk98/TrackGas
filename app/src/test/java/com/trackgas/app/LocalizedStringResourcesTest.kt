@@ -21,10 +21,10 @@ class LocalizedStringResourcesTest {
         val german = readStrings(resourceFile("values-de/strings.xml"))
         assertEquals("Total consumption", english.getValue("consumption_total").text)
         assertEquals("Gesamtverbrauch", german.getValue("consumption_total").text)
-        assertEquals("Daily consumption", english.getValue("chart_daily_title").text)
-        assertEquals("Tagesverbrauch", german.getValue("chart_daily_title").text)
-        assertEquals("Consumption", english.getValue("chart_absolute_title").text)
-        assertEquals("Verbrauch", german.getValue("chart_absolute_title").text)
+        assertEquals("Daily projection", english.getValue("chart_daily_title").text)
+        assertEquals("Tagesprojektion", german.getValue("chart_daily_title").text)
+        assertEquals("Interval consumption", english.getValue("chart_absolute_title").text)
+        assertEquals("Intervallverbrauch", german.getValue("chart_absolute_title").text)
         for (strings in listOf(english, german)) {
             for (key in listOf("chart_daily_title", "chart_absolute_title", "chart_mode_daily", "chart_mode_absolute")) {
                 assertFalse(strings.getValue(key).text.contains("24"))
@@ -36,9 +36,9 @@ class LocalizedStringResourcesTest {
         assertEquals("≈ 8,1 m³", String.format(Locale.GERMANY, german.getValue("chart_daily_estimate").text, "8,1"))
         assertEquals("%1\$s m³/day", english.getValue("chart_daily_volume").text)
         assertEquals("%1\$s m³/Tag", german.getValue("chart_daily_volume").text)
-        assertEquals("Estimated daily consumption: 8.1 cubic metres per day",
+        assertEquals("Estimated daily projection: 8.1 cubic metres per day",
             String.format(Locale.US, english.getValue("chart_daily_estimate_description").text, "8.1"))
-        assertEquals("Geschätzter Tagesverbrauch: 8,1 Kubikmeter pro Tag",
+        assertEquals("Geschätzte Tagesprojektion: 8,1 Kubikmeter pro Tag",
             String.format(Locale.GERMANY, german.getValue("chart_daily_estimate_description").text, "8,1"))
         assertEquals("≈ %1\$s m³ / 24 h", english.getValue("history_24h_estimate").text)
         assertEquals("≈ %1\$s m³ / 24 h", german.getValue("history_24h_estimate").text)
