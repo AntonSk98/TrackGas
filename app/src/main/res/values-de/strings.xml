@@ -35,9 +35,9 @@
     <string name="export_failure">CSV konnte nicht exportiert werden. Versuch es bitte erneut.</string>
     <string name="import_csv">CSV importieren</string>
     <string name="csv_import_reading">Datei wird gelesen…</string>
-    <string name="csv_import_preview_title">Zählerstände ersetzen?</string>
-    <string name="csv_import_replacement_warning">Ersetzt die Zählerstände der in der CSV enthaltenen Zähler. Zählerstände anderer Zähler bleiben unverändert.</string>
-    <string name="csv_import_confirm">Ersetzen</string>
+    <string name="csv_import_preview_title">Zählerstände importieren?</string>
+    <string name="csv_import_replacement_warning">Zähler aus dieser CSV importieren.</string>
+    <string name="csv_import_confirm">Importieren</string>
     <string name="csv_import_applying">Import wird ausgeführt…</string>
     <string name="csv_import_complete">%1$d Zählerstände importiert.</string>
     <string name="csv_import_no_changes">Keine Zählerstände zum Importieren.</string>
@@ -48,7 +48,6 @@
     <string name="csv_import_error_header">Ungültige Kopfzeile.</string>
     <string name="csv_import_error_row">Ungültige Zeile.</string>
     <string name="csv_import_error_meter_id">Ungültige Zähler-ID.</string>
-    <string name="csv_import_error_meter_unknown">Unbekannter Zähler.</string>
     <string name="csv_import_error_date">Ungültiges Datum.</string>
     <string name="csv_import_error_value">Ungültiger Wert.</string>
     <string name="csv_import_error_negative">Negativer Wert.</string>

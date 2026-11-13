@@ -59,19 +59,25 @@ class ReadingCsvParserTest {
     @Test fun importRetainsOmittedHistoryAndLastLocalDateRowWithAllFields() {
         val meter = "11111111-1111-4111-8111-111111111111"
         val omitted = "22222222-2222-4222-8222-222222222222"
+        val unknown = "33333333-3333-4333-8333-333333333333"
         val csv = "meter_id;timestamp;timezone;meter_value;note\n" +
             "$meter;2026-11-06T00:15+09:00;Asia/Tokyo;1;first\n" +
-            "$meter;2026-11-06T20:15+09:00;Asia/Tokyo;2.00;last\n"
+            "$meter;2026-11-06T20:15+09:00;Asia/Tokyo;2.00;last\n" +
+            "$unknown;2026-11-07T08:00Z;UTC;3;new meter\n"
         val parsed = (validateReadingCsv(csv, setOf(meter, omitted)) as CsvReadingValidation.Valid).rows
-        assertEquals(1, parsed.size)
-        assertEquals("last", parsed.single().note)
-        assertEquals(java.time.Instant.parse("2026-11-06T11:15:00Z"), parsed.single().observedAt)
+        assertEquals(2, parsed.size)
+        val importedMeterRow = parsed.single { it.installationId == meter }
+        assertEquals("last", importedMeterRow.note)
+        assertEquals(java.time.Instant.parse("2026-11-06T11:15:00Z"), importedMeterRow.observedAt)
         val retained = Reading("retained", java.time.LocalDate.parse("2026-10-01"), "10".toBigDecimal(), omitted)
         val base = TrackerData(listOf(retained), listOf(MeterInstallation(meter), MeterInstallation(omitted)))
         val imported = (validateCsvImportCandidate(base, parsed) { "new" } as CsvImportCandidateValidation.Valid).tracker
         assertEquals(retained, imported.readings.first { it.installationId == omitted })
         assertEquals("2.00", imported.readings.first { it.installationId == meter }.cubicMetres.toPlainString())
+        assertEquals(unknown, imported.installations.single { it.id == unknown }.id)
+        assertEquals("new meter", imported.readings.single { it.installationId == unknown }.note)
         assertEquals(listOf(retained), base.readings)
+        assertEquals(listOf(MeterInstallation(meter), MeterInstallation(omitted)), base.installations)
     }
     @Test fun parsesCurrentFiveColumnExample() {
         val text =
@@ -115,7 +121,11 @@ class ReadingCsvParserTest {
         val header = "meter_id;timestamp;timezone;meter_value;note\n"
         assertEquals(CsvImportErrorCode.CSV_ROW_INVALID, error(header + "short\n").code)
         assertEquals(CsvImportErrorCode.CSV_METER_ID_INVALID, error(header + "not-a-uuid;2026-10-28T08:00Z;UTC;1;\n").code)
-        assertEquals(CsvImportErrorCode.CSV_METER_UNKNOWN, error(header + "$unknown;2026-10-28T08:00Z;UTC;1;\n").code)
+        val unknownRow = (validateReadingCsv(
+            header + "$unknown;2026-10-28T08:00Z;UTC;1;\n",
+            known,
+        ) as CsvReadingValidation.Valid).rows.single()
+        assertEquals(unknown, unknownRow.installationId)
         assertEquals(CsvImportErrorCode.CSV_TIMESTAMP_INVALID, error(header + "$meter;not-a-date;UTC;1;\n").code)
         assertEquals(CsvImportErrorCode.CSV_TIMEZONE_INVALID, error(header + "$meter;2026-10-28T08:00Z;Not/AZone;1;\n").code)
         assertEquals(CsvImportErrorCode.CSV_VALUE_INVALID, error(header + "$meter;2026-10-28T08:00Z;UTC;one;\n").code)

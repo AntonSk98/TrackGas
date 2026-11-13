@@ -56,10 +56,10 @@ files remain wherever you saved them, so keep them somewhere private.
 
 Open **Tracker options > Export CSV** to save your readings and notes.
 
-**Import CSV** replaces the history of the meters included in the file after
-you confirm. Other meters are left unchanged. Only meters already known to the
-app can be imported, so **CSV is not a full backup and cannot restore a tracker
-after reinstalling**. Weather data is fetched again when needed.
+**Import CSV** replaces the history of existing meters included in the file
+after you confirm. A valid UUID the app has not seen before creates a new meter;
+other meters are left unchanged. **CSV is not a full backup and cannot restore
+a tracker after reinstalling**. Weather data is fetched again when needed.
 
 <details>
 <summary>CSV format reference</summary>

@@ -93,7 +93,6 @@ private fun csvImportErrorMessage(code: CsvImportErrorCode): Int = when (code) {
     CsvImportErrorCode.CSV_HEADER_INVALID -> R.string.csv_import_error_header
     CsvImportErrorCode.CSV_ROW_INVALID -> R.string.csv_import_error_row
     CsvImportErrorCode.CSV_METER_ID_INVALID -> R.string.csv_import_error_meter_id
-    CsvImportErrorCode.CSV_METER_UNKNOWN -> R.string.csv_import_error_meter_unknown
     CsvImportErrorCode.CSV_TIMESTAMP_INVALID -> R.string.csv_import_error_timestamp
     CsvImportErrorCode.CSV_TIMEZONE_INVALID -> R.string.csv_import_error_timezone
     CsvImportErrorCode.CSV_VALUE_INVALID -> R.string.csv_import_error_value

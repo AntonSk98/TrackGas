@@ -17,7 +17,6 @@ enum class CsvImportErrorCode {
     CSV_HEADER_INVALID,
     CSV_ROW_INVALID,
     CSV_METER_ID_INVALID,
-    CSV_METER_UNKNOWN,
     CSV_TIMESTAMP_INVALID,
     CSV_TIMEZONE_INVALID,
     CSV_VALUE_INVALID,
@@ -83,9 +82,7 @@ fun validateReadingCsv(
         val meterUuid = parseCanonicalUuid(record.fields[0]) ?: return CsvReadingValidation.Invalid(
             CsvImportError(CsvImportErrorCode.CSV_METER_ID_INVALID, record.physicalRow, CsvImportField.METER_ID),
         )
-        val installationId = knownByUuid[meterUuid] ?: return CsvReadingValidation.Invalid(
-            CsvImportError(CsvImportErrorCode.CSV_METER_UNKNOWN, record.physicalRow, CsvImportField.METER_ID),
-        )
+        val installationId = knownByUuid[meterUuid] ?: meterUuid
         val zone = try { java.time.ZoneId.of(record.fields[2]) } catch (_: java.time.DateTimeException) {
             null
         } ?: return CsvReadingValidation.Invalid(
@@ -149,13 +146,15 @@ internal fun csvImportCandidate(
 ): TrackerData {
     val affected = rows.map { it.installationId }.toSet()
     val retained = base.readings.filterNot { it.installationId in affected }
+    val installationIds = base.installations.mapTo(mutableSetOf()) { it.id }
+    val newInstallations = affected.filter { installationIds.add(it) }.map { MeterInstallation(it) }
     val identities = retained.mapTo(mutableSetOf()) { it.id }
     val imported = rows.map { row ->
         var id: String
         do { id = newReadingId() } while (id.isBlank() || !identities.add(id))
         Reading(id, row.date, row.cubicMetres, row.installationId, row.note, row.observedAt, row.zone)
     }
-    return base.copy(readings = retained + imported)
+    return base.copy(readings = retained + imported, installations = base.installations + newInstallations)
 }
 
 internal sealed interface CsvImportCandidateValidation {

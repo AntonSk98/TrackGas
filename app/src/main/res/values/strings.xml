@@ -35,9 +35,9 @@
     <string name="export_failure">Could not export CSV. Try again.</string>
     <string name="import_csv">Import CSV</string>
     <string name="csv_import_reading">Reading file…</string>
-    <string name="csv_import_preview_title">Replace readings?</string>
-    <string name="csv_import_replacement_warning">Replaces readings for meters included in the CSV. Readings for other meters stay unchanged.</string>
-    <string name="csv_import_confirm">Replace</string>
+    <string name="csv_import_preview_title">Import readings?</string>
+    <string name="csv_import_replacement_warning">Import meters from this CSV.</string>
+    <string name="csv_import_confirm">Import</string>
     <string name="csv_import_applying">Importing…</string>
     <string name="csv_import_complete">Imported %1$d meters.</string>
     <string name="csv_import_no_changes">No readings to import.</string>
@@ -48,7 +48,6 @@
     <string name="csv_import_error_header">Invalid header.</string>
     <string name="csv_import_error_row">Invalid row.</string>
     <string name="csv_import_error_meter_id">Invalid meter ID.</string>
-    <string name="csv_import_error_meter_unknown">Unknown meter.</string>
     <string name="csv_import_error_date">Invalid date.</string>
     <string name="csv_import_error_value">Invalid value.</string>
     <string name="csv_import_error_negative">Negative value.</string>
