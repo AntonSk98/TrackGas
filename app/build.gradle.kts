@@ -15,7 +15,7 @@ val hasReleaseSigning = listOf(
 
 android {
     namespace = "com.trackgas.app"
-    compileSdk = 36
+    compileSdk = 37
     buildToolsVersion = "36.0.0"
 
     signingConfigs {
@@ -32,7 +32,7 @@ android {
     defaultConfig {
         applicationId = "com.trackgas.app"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0.0"
     }
@@ -72,19 +72,19 @@ ksp {
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.7.1")
-    implementation("androidx.activity:activity-compose:1.10.1")
-    implementation("androidx.lifecycle:lifecycle-viewmodel:2.8.7")
-    implementation("androidx.work:work-runtime-ktx:2.10.1")
-    implementation(platform("androidx.compose:compose-bom:2025.04.01"))
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel:2.11.0")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
+    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
-    implementation("com.patrykandpatrick.vico:compose:2.1.2")
-    implementation("com.patrykandpatrick.vico:compose-m3:2.1.2")
-    implementation("androidx.room:room-runtime:2.8.4")
-    implementation("androidx.room:room-ktx:2.8.4")
-    ksp("androidx.room:room-compiler:2.8.4")
+    implementation("com.patrykandpatrick.vico:compose:3.3.1")
+    implementation("com.patrykandpatrick.vico:compose-m3:3.3.1")
+    implementation("androidx.room:room-runtime:2.8.5")
+    implementation("androidx.room:room-ktx:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20240303")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    testImplementation("org.json:json:20260814")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }

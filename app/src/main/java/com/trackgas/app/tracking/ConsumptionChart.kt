@@ -1,6 +1,5 @@
 package com.trackgas.app.tracking
 
-import android.graphics.RectF
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
@@ -11,6 +10,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -30,55 +30,46 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
+import com.patrykandpatrick.vico.compose.cartesian.CartesianDrawingContext
+import com.patrykandpatrick.vico.compose.cartesian.Zoom
 import com.patrykandpatrick.vico.compose.cartesian.axis.rememberAxisLabelComponent
-import com.patrykandpatrick.vico.compose.cartesian.axis.rememberBottom
-import com.patrykandpatrick.vico.compose.cartesian.axis.rememberStart
+import com.patrykandpatrick.vico.compose.cartesian.axis.BaseAxis
+import com.patrykandpatrick.vico.compose.cartesian.axis.HorizontalAxis
+import com.patrykandpatrick.vico.compose.cartesian.axis.VerticalAxis
+import com.patrykandpatrick.vico.compose.cartesian.data.CartesianChartModelProducer
+import com.patrykandpatrick.vico.compose.cartesian.data.CartesianLayerRangeProvider
+import com.patrykandpatrick.vico.compose.cartesian.data.CartesianValueFormatter
+import com.patrykandpatrick.vico.compose.cartesian.data.ColumnCartesianLayerModel
+import com.patrykandpatrick.vico.compose.cartesian.data.columnModel
+import com.patrykandpatrick.vico.compose.cartesian.data.lineModel
+import com.patrykandpatrick.vico.compose.cartesian.layer.CartesianLayerPadding
+import com.patrykandpatrick.vico.compose.cartesian.layer.ColumnCartesianLayer
+import com.patrykandpatrick.vico.compose.cartesian.layer.LineCartesianLayer
 import com.patrykandpatrick.vico.compose.cartesian.layer.rememberColumnCartesianLayer
 import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLayer
-import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLine
-import com.patrykandpatrick.vico.compose.cartesian.layer.point
 import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
 import com.patrykandpatrick.vico.compose.cartesian.rememberVicoScrollState
 import com.patrykandpatrick.vico.compose.cartesian.rememberVicoZoomState
+import com.patrykandpatrick.vico.compose.cartesian.marker.CartesianMarker
 import com.patrykandpatrick.vico.compose.common.ProvideVicoTheme
+import com.patrykandpatrick.vico.compose.common.DrawingContext
+import com.patrykandpatrick.vico.compose.common.Fill
+import com.patrykandpatrick.vico.compose.common.Insets
 import com.patrykandpatrick.vico.compose.common.component.rememberLineComponent
 import com.patrykandpatrick.vico.compose.common.component.rememberShapeComponent
-import com.patrykandpatrick.vico.compose.common.fill
-import com.patrykandpatrick.vico.compose.common.insets
+import com.patrykandpatrick.vico.compose.common.component.LineComponent
+import com.patrykandpatrick.vico.compose.common.component.TextComponent
+import com.patrykandpatrick.vico.compose.common.data.ExtraStore
 import com.patrykandpatrick.vico.compose.m3.common.rememberM3VicoTheme
-import com.patrykandpatrick.vico.core.cartesian.Zoom
-import com.patrykandpatrick.vico.core.cartesian.CartesianDrawingContext
-import com.patrykandpatrick.vico.core.cartesian.axis.BaseAxis
-import com.patrykandpatrick.vico.core.cartesian.axis.HorizontalAxis
-import com.patrykandpatrick.vico.core.cartesian.axis.VerticalAxis
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianLayerRangeProvider
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianValueFormatter
-import com.patrykandpatrick.vico.core.cartesian.data.ColumnCartesianLayerModel
-import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
-import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
-import com.patrykandpatrick.vico.core.cartesian.layer.ColumnCartesianLayer
-import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
-import com.patrykandpatrick.vico.core.cartesian.layer.CartesianLayerPadding
-import com.patrykandpatrick.vico.core.cartesian.marker.CartesianMarker
-import com.patrykandpatrick.vico.core.common.DrawingContext
-import com.patrykandpatrick.vico.core.common.Fill
-import com.patrykandpatrick.vico.core.common.MeasuringContext
-import com.patrykandpatrick.vico.core.common.component.LineComponent
-import com.patrykandpatrick.vico.core.common.component.TextComponent
-import com.patrykandpatrick.vico.core.common.data.CacheStore
-import com.patrykandpatrick.vico.core.common.data.ExtraStore
-import com.patrykandpatrick.vico.core.common.data.MutableExtraStore
-import com.patrykandpatrick.vico.core.common.shape.CorneredShape
 import com.trackgas.app.R
 import java.math.BigDecimal
 import java.text.DecimalFormat
@@ -123,11 +114,14 @@ private fun ProjectedCharts(
     modifier: Modifier,
 ) {
     BoxWithConstraints(modifier.fillMaxWidth()) {
+        val labelStyle = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         val label = rememberAxisLabelComponent(
+            style = labelStyle,
             lineCount = 1,
-            margins = insets(horizontal = 4.dp, vertical = 4.dp),
+            margins = Insets(horizontal = 4.dp, vertical = 4.dp),
+            padding = Insets.Zero,
         )
-        val presentation = rememberChartPresentation(projection, locale, maxWidth.value, label)
+        val presentation = rememberChartPresentation(projection, locale, maxWidth.value, labelStyle)
         Column {
             // A gas snapshot owns its model and scale; temperature does not depend on mode.
             key(projection) {
@@ -172,24 +166,14 @@ private fun rememberChartPresentation(
     projection: ChartProjection,
     locale: Locale,
     width: Float,
-    label: TextComponent,
+    labelStyle: TextStyle,
 ): ChartLayout {
-    val composeDensity = LocalDensity.current
-    val layoutIsLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
-    val context = remember(composeDensity, layoutIsLtr) {
-        object : MeasuringContext {
-            override val canvasBounds = RectF()
-            override val density = composeDensity.density
-            override val extraStore = MutableExtraStore()
-            override val isLtr = layoutIsLtr
-            override val cacheStore = CacheStore()
-            override fun spToPx(sp: Float) = with(composeDensity) { sp.sp.toPx() }
-        }
-    }
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
     val resources = LocalContext.current.resources
     val volumeTitle = stringResource(projection.mode.volumeResource, "").trim()
     val temperatureTitle = stringResource(R.string.temperature_axis, "").trim()
-    return remember(projection, locale, width, label, context, resources, volumeTitle, temperatureTitle) {
+    return remember(projection, locale, width, labelStyle, textMeasurer, density, resources, volumeTitle, temperatureTitle) {
         val dates = (0 until projection.positionCount).map { offset ->
             val date = if (projection.period.type == PeriodType.YEAR) {
                 projection.period.start.plusMonths(offset.toLong())
@@ -206,8 +190,10 @@ private fun rememberChartPresentation(
             }.orEmpty()
         val titles = if (projection.temperatures.isEmpty()) listOf(volumeTitle)
             else listOf(volumeTitle, temperatureTitle)
-        fun textWidth(text: String) = label.getWidth(context, text) / context.density
-        fun textHeight(text: String) = label.getHeight(context, text, pad = false) / context.density
+        fun textWidth(text: String) =
+            textMeasurer.measure(text, style = labelStyle, maxLines = 1).size.width / density.density + 8f
+        fun textHeight(text: String) =
+            textMeasurer.measure(text, style = labelStyle, maxLines = 1).size.height / density.density + 8f
         val dateWidth = dates.maxOf(::textWidth)
         val valueWidth = values.maxOf(::textWidth)
         val titleThickness = titles.maxOf(::textHeight)
@@ -238,7 +224,7 @@ private fun ProjectedConsumptionChart(
     LaunchedEffect(producer, projection) {
         producer.runTransaction {
             if (projection.entries.isNotEmpty()) {
-                columnSeries {
+                columnModel {
                     series(
                         x = projection.entries.map { it.offset },
                         y = projection.entries.map { it.normalizedY },
@@ -248,21 +234,20 @@ private fun ProjectedConsumptionChart(
         }
     }
     val bar = rememberLineComponent(
-        fill(MaterialTheme.colorScheme.primary),
+        Fill(MaterialTheme.colorScheme.primary),
         thickness = CONSUMPTION_BAR_WIDTH.dp,
     )
-    val zeroFill = fill(MaterialTheme.colorScheme.primary)
+    val zeroFill = Fill(MaterialTheme.colorScheme.primary)
     val columns = remember(projection, bar, zeroFill) {
-        val zero = BaselineZeroComponent(zeroFill, bar.thicknessDp)
+        val zero = BaselineZeroComponent(zeroFill, bar.thickness)
         val zeroOffsets = projection.entries.filter { it.isZero }.map { it.offset }.toSet()
         object : ColumnCartesianLayer.ColumnProvider {
             override fun getColumn(
                 entry: ColumnCartesianLayerModel.Entry,
-                seriesIndex: Int,
                 extraStore: ExtraStore,
             ): LineComponent = if (entry.x.toInt() in zeroOffsets) zero else bar
 
-            override fun getWidestSeriesColumn(seriesIndex: Int, extraStore: ExtraStore) = bar
+            override fun getWidestSeriesColumn(seriesKey: Any, seriesIndex: Int, extraStore: ExtraStore) = bar
         }
     }
     val range = remember(projection.positionCount) {
@@ -289,6 +274,7 @@ private fun ProjectedConsumptionChart(
             chartAxisText(projection, value, locale)
         }
     }
+    val axisTitle = stringResource(projection.mode.volumeResource, "").trim()
     val layout = presentation
     val spacing = layout.tickSpacing
     val resources = LocalContext.current.resources
@@ -311,8 +297,8 @@ private fun ProjectedConsumptionChart(
             VerticalAxis.ItemPlacer.count(count = { if (projection.scale.signum() == 0) 1 else 3 })
         },
         label = label,
-        size = BaseAxis.Size.Auto(layout.valueAxisWidth, layout.valueAxisWidth),
-        title = stringResource(projection.mode.volumeResource, "").trim(),
+        size = BaseAxis.Size.Auto(layout.valueAxisWidth.dp, layout.valueAxisWidth.dp),
+        title = { axisTitle },
         titleComponent = label,
         tick = null,
         tickLength = 0.dp,
@@ -341,12 +327,13 @@ private fun ProjectedConsumptionChart(
                 // Cancel the column's intrinsic scalable half-width; both plots use fixed edge space.
                 layerPadding = {
                     CartesianLayerPadding(
-                        scalableStartDp = -CONSUMPTION_BAR_WIDTH / 2f,
-                        scalableEndDp = -CONSUMPTION_BAR_WIDTH / 2f,
-                        unscalableStartDp = layout.edgePadding, unscalableEndDp = layout.edgePadding,
+                        scalableStart = (-CONSUMPTION_BAR_WIDTH / 2f).dp,
+                        scalableEnd = (-CONSUMPTION_BAR_WIDTH / 2f).dp,
+                        unscalableStart = layout.edgePadding.dp,
+                        unscalableEnd = layout.edgePadding.dp,
                     )
                 },
-                getXStep = { 1.0 },
+                getXStep = { _, _, _ -> 1.0 },
             ),
             modelProducer = producer,
             modifier = Modifier.fillMaxWidth().height(layout.consumptionHeight.dp)
@@ -360,7 +347,7 @@ private fun ProjectedConsumptionChart(
                 maxZoom = Zoom.Content,
             ),
             animationSpec = null,
-            animateIn = false,
+            initialAnimationSpec = null,
         )
         ChartInspectionOverlay(inspection, layout.consumptionHeight.dp, MaterialTheme.colorScheme.primary)
     }
@@ -394,7 +381,7 @@ private fun rememberInspection(
     var anchorX by remember { mutableStateOf(0f) }
     val resources = LocalContext.current.resources
     val currentDetails by rememberUpdatedState(details)
-    val guideline = rememberLineComponent(fill(accent.copy(alpha = 0.35f)), thickness = 1.dp)
+    val guideline = rememberLineComponent(Fill(accent.copy(alpha = 0.35f)), thickness = 1.dp)
     val marker = remember(projection, locale, resources, guideline) {
         ChartInspectionMarker(guideline) { offset, canvasX ->
             anchorX = canvasX
@@ -484,7 +471,7 @@ internal fun CartesianChartModelProducer.Transaction.temperatureSeries(entries: 
     val segments = temperatureSegments(entries)
     if (segments.isEmpty()) return
     // One model for the one line layer; separate series preserve gaps without dropping later segments.
-    lineSeries {
+    lineModel {
         segments.forEach { segment ->
             series(x = segment.map { it.offset }, y = segment.map { it.celsius })
         }
@@ -507,11 +494,12 @@ private fun ProjectedTemperatureChart(
         }
     }
     val color = MaterialTheme.colorScheme.tertiary
-    val line = LineCartesianLayer.rememberLine(
-        fill = LineCartesianLayer.LineFill.single(fill(color)),
+    val pointComponent = rememberShapeComponent(Fill(color), CircleShape)
+    val line = LineCartesianLayer.Line(
+        fill = LineCartesianLayer.LineFill.single(Fill(color)),
         pointProvider = LineCartesianLayer.PointProvider.single(
-            LineCartesianLayer.point(
-                rememberShapeComponent(fill(color), CorneredShape.Pill),
+            LineCartesianLayer.Point(
+                component = pointComponent,
                 size = TEMPERATURE_POINT_SIZE.dp,
             ),
         ),
@@ -522,6 +510,7 @@ private fun ProjectedTemperatureChart(
             context.resources.getString(R.string.temperature_axis, numberText(BigDecimal.valueOf(value), locale))
         }
     }
+    val axisTitle = stringResource(R.string.temperature_axis, "").trim()
     val range = remember(projection) {
         val bounds = requireNotNull(temperatureRange(projection))
         CartesianLayerRangeProvider.fixed(
@@ -546,8 +535,8 @@ private fun ProjectedTemperatureChart(
                     label = label,
                     valueFormatter = formatter,
                     itemPlacer = VerticalAxis.ItemPlacer.count(count = { 2 }),
-                    size = BaseAxis.Size.Auto(layout.valueAxisWidth, layout.valueAxisWidth),
-                    title = stringResource(R.string.temperature_axis, "").trim(),
+                    size = BaseAxis.Size.Auto(layout.valueAxisWidth.dp, layout.valueAxisWidth.dp),
+                    title = { axisTitle },
                     titleComponent = label,
                     tick = null,
                     tickLength = 0.dp,
@@ -557,11 +546,11 @@ private fun ProjectedTemperatureChart(
                 // Line layers already reserve the point's 3 dp radius.
                 layerPadding = {
                     CartesianLayerPadding(
-                        unscalableStartDp = layout.edgePadding - TEMPERATURE_POINT_SIZE / 2f,
-                        unscalableEndDp = layout.edgePadding - TEMPERATURE_POINT_SIZE / 2f,
+                        unscalableStart = (layout.edgePadding - TEMPERATURE_POINT_SIZE / 2f).dp,
+                        unscalableEnd = (layout.edgePadding - TEMPERATURE_POINT_SIZE / 2f).dp,
                     )
                 },
-                getXStep = { 1.0 },
+                getXStep = { _, _, _ -> 1.0 },
             ),
             modelProducer = producer,
             modifier = Modifier.fillMaxWidth().height(layout.temperatureHeight.dp).then(inspection.modifier),
@@ -573,7 +562,7 @@ private fun ProjectedTemperatureChart(
                 maxZoom = Zoom.Content,
             ),
             animationSpec = null,
-            animateIn = false,
+            initialAnimationSpec = null,
         )
         ChartInspectionOverlay(inspection, layout.temperatureHeight.dp, color)
     }
@@ -589,7 +578,7 @@ private fun temperatureRange(projection: ChartProjection): ClosedFloatingPointRa
 }
 
 /** A horizontal baseline dash, not a fictitious positive-height consumption bar. */
-private class BaselineZeroComponent(fill: Fill, thicknessDp: Float) : LineComponent(fill, thicknessDp) {
+private class BaselineZeroComponent(fill: Fill, thickness: Dp) : LineComponent(fill, thickness) {
     override fun drawVertical(
         context: DrawingContext,
         x: Float,
@@ -597,8 +586,8 @@ private class BaselineZeroComponent(fill: Fill, thicknessDp: Float) : LineCompon
         bottom: Float,
         thicknessFactor: Float,
     ) {
-        val halfWidth = with(context) { thicknessDp.pixels } * thicknessFactor / 2
-        val stroke = with(context) { 2f.pixels }
+        val halfWidth = with(context.density) { thickness.toPx() } * thicknessFactor / 2
+        val stroke = with(context.density) { 2.dp.toPx() }
         draw(context, x - halfWidth, bottom - stroke, x + halfWidth, bottom)
     }
 }

@@ -5,16 +5,14 @@ import com.trackgas.app.tracking.ChartInspectionMarker
 import com.trackgas.app.tracking.chartLayout
 import com.trackgas.app.tracking.chartTooltipLeft
 import com.trackgas.app.tracking.TemperatureChartEntry
+import com.trackgas.app.tracking.temperatureSegments
 import com.trackgas.app.tracking.temperatureSeries
-import com.patrykandpatrick.vico.core.cartesian.CartesianMeasuringContext
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModel
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartRanges
-import com.patrykandpatrick.vico.core.cartesian.data.ColumnCartesianLayerModel
-import com.patrykandpatrick.vico.core.cartesian.data.LineCartesianLayerModel
-import com.patrykandpatrick.vico.core.cartesian.layer.CartesianLayerDimensions
-import com.patrykandpatrick.vico.core.cartesian.layer.CartesianLayerMargins
-import com.patrykandpatrick.vico.core.common.data.MutableExtraStore
+import com.patrykandpatrick.vico.compose.cartesian.CartesianMeasuringContext
+import com.patrykandpatrick.vico.compose.cartesian.data.CartesianChartModel
+import com.patrykandpatrick.vico.compose.cartesian.data.CartesianChartModelProducer
+import com.patrykandpatrick.vico.compose.cartesian.data.ColumnCartesianLayerModel
+import com.patrykandpatrick.vico.compose.cartesian.layer.CartesianLayerDimensions
+import com.patrykandpatrick.vico.compose.cartesian.layer.CartesianLayerMargins
 import java.lang.reflect.Proxy
 import java.math.BigDecimal
 import kotlinx.coroutines.test.runTest
@@ -174,74 +172,40 @@ class ChartLayoutPolicyTest {
         assertEquals(0, chartTooltipLeft(320, 320, 200f))
     }
 
-    private suspend fun withTemperatureProducer(
-        block: suspend (CartesianChartModelProducer, () -> CartesianChartModel?) -> Unit,
-    ) {
-        val producer = CartesianChartModelProducer()
-        val key = Any()
-        var observed: CartesianChartModel? = null
-        producer.registerForUpdates(
-            key = key,
-            cancelAnimation = {},
-            startAnimation = {},
-            prepareForTransformation = { model, _, _ -> observed = model },
-            transform = { _, _ -> },
-            hostExtraStore = MutableExtraStore(),
-            updateRanges = { CartesianChartRanges.Empty },
-            onUpdate = { _, _, _ -> },
-        )
-        try {
-            block(producer) { observed }
-        } finally {
-            producer.unregisterFromUpdates(key)
-        }
-    }
-
-    @Test fun actualTemperatureProducerKeepsEveryGapSeparatedSegmentInOneLayerModel() = runTest {
+    @Test fun temperatureSegmentsKeepEveryGapAndAllEntries() {
         val entries = listOf(
             TemperatureChartEntry(0, BigDecimal("9.5")),
             TemperatureChartEntry(2, BigDecimal("11.5")),
             TemperatureChartEntry(3, BigDecimal("12.3")),
             TemperatureChartEntry(6, BigDecimal("15.5")),
         )
-        withTemperatureProducer { producer, observed ->
-            producer.runTransaction { temperatureSeries(entries) }
-            val models = requireNotNull(observed()).models
-            assertEquals(1, models.size)
-            val lines = models.single() as LineCartesianLayerModel
-            assertEquals(listOf(listOf(0.0), listOf(2.0, 3.0), listOf(6.0)), lines.series.map { series -> series.map { it.x } })
-            assertEquals(entries.map { it.celsius.toDouble() }, lines.series.flatten().map { it.y })
-        }
+        assertEquals(
+            listOf(listOf(entries[0]), listOf(entries[1], entries[2]), listOf(entries[3])),
+            temperatureSegments(entries),
+        )
     }
 
-    @Test fun actualTemperatureProducerRetainsContiguousAndSinglePointSeries() = runTest {
-        withTemperatureProducer { producer, observed ->
-            for (entries in listOf(
-                listOf(TemperatureChartEntry(4, BigDecimal("-2.5"))),
-                listOf(
-                    TemperatureChartEntry(2, BigDecimal("0")),
-                    TemperatureChartEntry(3, BigDecimal("2.5")),
-                    TemperatureChartEntry(4, BigDecimal("4.5")),
-                ),
-            )) {
-                producer.runTransaction { temperatureSeries(entries) }
-                val model = requireNotNull(observed()).models.single() as LineCartesianLayerModel
-                assertEquals(1, model.series.size)
-                assertEquals(entries.map { it.offset.toDouble() }, model.series.single().map { it.x })
-                assertEquals(entries.map { it.celsius.toDouble() }, model.series.single().map { it.y })
-            }
-        }
+    @Test fun temperatureSegmentsRetainContiguousAndSinglePointRanges() {
+        val single = listOf(TemperatureChartEntry(4, BigDecimal("-2.5")))
+        val contiguous = listOf(
+            TemperatureChartEntry(2, BigDecimal("0")),
+            TemperatureChartEntry(3, BigDecimal("2.5")),
+            TemperatureChartEntry(4, BigDecimal("4.5")),
+        )
+        assertEquals(listOf(single), temperatureSegments(single))
+        assertEquals(listOf(contiguous), temperatureSegments(contiguous))
     }
 
-    @Test fun actualTemperatureProducerClearsAllSegmentsWhenCoverageBecomesEmpty() = runTest {
-        withTemperatureProducer { producer, observed ->
-            producer.runTransaction {
-                temperatureSeries(listOf(TemperatureChartEntry(0, BigDecimal("12.3"))))
-            }
-            assertNotNull(observed())
-            producer.runTransaction { temperatureSeries(emptyList()) }
-            assertNull(observed())
+    @Test fun temperatureSegmentsAreEmptyWhenThereAreNoEntries() {
+        assertEquals(emptyList<List<TemperatureChartEntry>>(), temperatureSegments(emptyList()))
+    }
+
+    @Test fun temperatureSeriesTransactionsAcceptDataAndEmptyCoverage() = runTest {
+        val producer = CartesianChartModelProducer()
+        producer.runTransaction {
+            temperatureSeries(listOf(TemperatureChartEntry(0, BigDecimal("12.3"))))
         }
+        producer.runTransaction { temperatureSeries(emptyList()) }
     }
 
     @Test fun veryLargeMeasurementsStayBoundedWithoutInvertingHierarchy() {

@@ -32,7 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var csvPickerCoordinator: CsvDocumentPickerCoordinator
     private val tracker by lazy {
         val app = application as TrackGasApplication
-        val activeTasks = getSystemService(ActivityManager::class.java).appTasks.map { it.taskInfo.id }.toSet()
+        val activeTasks = getSystemService(ActivityManager::class.java).appTasks.mapNotNull { it.taskInfo?.id }.toSet()
         val store = app.trackerStoreOwner.obtain(trackerId, taskId, activeTasks)
         ViewModelProvider(
             store,

@@ -1,41 +1,29 @@
-# Release deployment
+# Releases
 
-TrackGas releases are signed APKs published as GitHub Releases. Pushes to the
-`delivery` branch build and publish the version configured in
-`app/build.gradle.kts`.
+Pushing to `delivery` builds a signed APK and publishes it as a GitHub Release.
+The version comes from `app/build.gradle.kts`.
 
 ## One-time setup
 
-1. Generate a release keystore in a secure local directory. Keep the keystore
-   password and key password distinct if possible:
+1. Generate a keystore and keep a secure offline backup:
 
-   ```text
+   ```bash
    keytool -genkeypair -v -keystore trackgas-release.jks -alias trackgas-release -keyalg RSA -keysize 2048 -validity 10000
    ```
 
-2. Make at least one encrypted offline backup of the keystore and store its
-   passwords securely. Losing the keystore prevents updates from installing
-   over existing installations. Never commit the keystore or its passwords.
-3. Base64-encode the keystore without line breaks. In Git Bash, copy the
-   encoded value to the clipboard:
-
-   ```bash
-   base64 -w 0 trackgas-release.jks | clip.exe
-   ```
-
-   Add the copied value as a repository Actions secret, then clear the
-   clipboard with `printf '' | clip.exe`.
-4. In the repository's **Settings > Secrets and variables > Actions**, add
-   these four repository secrets:
+   Keep its passwords safe and never commit the keystore.
+2. Encode it as one line with `base64 -w 0 trackgas-release.jks`. Copy the
+   output into the `RELEASE_KEYSTORE_BASE64` Actions secret.
+3. Add these repository secrets under **Settings > Secrets and variables >
+   Actions**:
 
    | Secret | Value |
    | --- | --- |
-   | `RELEASE_KEYSTORE_BASE64` | Base64-encoded keystore contents |
+   | `RELEASE_KEYSTORE_BASE64` | Base64-encoded keystore |
    | `RELEASE_KEYSTORE_PASSWORD` | Keystore password |
-   | `RELEASE_KEY_ALIAS` | `trackgas-release` (or the alias chosen above) |
-   | `RELEASE_KEY_PASSWORD` | Password for the key |
+   | `RELEASE_KEY_ALIAS` | `trackgas-release` (or your chosen alias) |
 
-5. Create and push the `delivery` branch from `main`:
+4. Create and push `delivery` from `main`:
 
    ```bash
    git switch main
@@ -43,13 +31,10 @@ TrackGas releases are signed APKs published as GitHub Releases. Pushes to the
    git push -u origin delivery
    ```
 
-## Per-release checklist
+## Publish a release
 
-1. In `app/build.gradle.kts`, increase `versionCode` and set `versionName` to
-   the new release version. Each `versionName` must be unique because it
-   becomes the immutable tag `v<versionName>`.
-2. Merge the updated `main` branch into `delivery`, resolve any conflicts, and
-   push `delivery`:
+1. Increase `versionCode` and set a unique `versionName` in
+   `app/build.gradle.kts`. Merge `main` into `delivery` and push:
 
    ```bash
    git switch delivery
@@ -57,38 +42,10 @@ TrackGas releases are signed APKs published as GitHub Releases. Pushes to the
    git push origin delivery
    ```
 
-3. Watch the **Release APK** workflow in the repository's Actions tab. It
-   checks the version tag, builds `:app:assembleRelease`, and publishes
-   `TrackGas-<versionName>.apk` as a GitHub Release.
-4. Verify the workflow succeeded, the `v<versionName>` GitHub Release exists,
-   and its APK asset downloads successfully.
-5. Install the APK on a test device and smoke-test startup, reading history,
-   and recording a reading. Test an update over the previous signed release
-   when possible; use the same release keystore for every update.
+2. In Actions, verify the **Release APK** workflow succeeds and the GitHub
+   Release contains `TrackGas-<versionName>.apk`.
+3. Install and smoke-test the APK. Keep using the same keystore so users can
+   install updates over existing versions.
 
-## Troubleshooting
-
-- **Tag already exists:** Do not delete or overwrite the published tag. Increase
-  both `versionCode` and `versionName`, merge the change into `delivery`, and
-  push again.
-- **Missing signing secrets:** Configure all four repository secrets with the
-  exact names above, then rerun the failed workflow. The job deliberately fails
-  rather than publishing an unsigned APK.
-- **R8 build failure or release-only behavior:** Review the workflow's Gradle
-  output, reproduce with `:app:assembleRelease` locally, and add narrowly
-  scoped keep rules to `app/proguard-rules.pro` when required. Rebuild and
-  smoke-test before publishing.
-- **Keystore or signing failure:** Confirm the base64 value was copied without
-  truncation, and verify the alias and both passwords. Do not generate a
-  replacement key for an ordinary release; an unrelated key cannot update
-  existing installations.
-
-## Rollback and hotfixes
-
-Do not reuse a version tag or lower `versionCode`. To roll back a bad release,
-restore the known-good app code on `main`, assign a new, higher `versionCode`
-and a new `versionName`, then release that version through `delivery`. This
-publishes the known-good behavior as a valid update. Keep the same keystore so
-users can install it over the affected release. For a hotfix, make the fix on
-`main`, bump both version values, and follow the normal merge and release
-checklist.
+Never reuse a published version tag. If one already exists, increase both
+version values and release again.
