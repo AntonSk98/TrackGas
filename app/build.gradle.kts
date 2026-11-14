@@ -7,12 +7,10 @@ plugins {
 val releaseKeystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
 val releaseKeystorePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
 val releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS")
-val releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")
 val hasReleaseSigning = listOf(
     releaseKeystorePath,
     releaseKeystorePassword,
     releaseKeyAlias,
-    releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
 
 android {
@@ -26,7 +24,7 @@ android {
                 storeFile = file(requireNotNull(releaseKeystorePath))
                 storePassword = releaseKeystorePassword
                 keyAlias = releaseKeyAlias
-                keyPassword = releaseKeyPassword
+                keyPassword = releaseKeystorePassword
             }
         }
     }
@@ -36,7 +34,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "1.0.0"
     }
 
     compileOptions {
