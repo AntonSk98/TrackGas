@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.trackgas.app.temperature.MeterLocation
 import com.trackgas.app.temperature.TemperatureServices
 import com.trackgas.app.temperature.IntervalTemperatureEntity
+import com.trackgas.app.temperature.DailyTemperatureEntity
 import com.trackgas.app.temperature.TemperatureAggregation
 import java.time.Instant
 import java.time.ZoneId
@@ -33,6 +34,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 
 enum class TrackerTab { DASHBOARD, HISTORY }
 enum class ReadingLoadState { LOADING, READY, ERROR }
@@ -86,6 +89,8 @@ data class TrackerState(
     val locationDialog: MeterLocationDialog = MeterLocationDialog.Closed,
     val meterLocation: MeterLocation? = null,
     val temperatures: Map<LocalDate, BigDecimal> = emptyMap(),
+    val intervalTemperatures: Map<LocalDate, BigDecimal> = emptyMap(),
+    val dailyTemperatures: Map<LocalDate, BigDecimal> = emptyMap(),
     val sessionId: String = UUID.randomUUID().toString(),
     val tracker: TrackerData = TrackerData(readings),
     val export: ExportState = ExportState.Idle,
@@ -121,6 +126,7 @@ class TrackerViewModel(
     private var observationGeneration = 0L
     private var acceptedRevision = Long.MIN_VALUE
     private var intervalMeans: List<IntervalTemperatureEntity> = emptyList()
+    private var dailyMeans: List<DailyTemperatureEntity> = emptyList()
     // Identifies the location revision these cached means belong to, not a reading revision.
     private var intervalMeansGeneration: Long? = null
 
@@ -147,6 +153,7 @@ class TrackerViewModel(
 
     fun selectChartMode(mode: ConsumptionChartMode) {
         state = state.copy(chartMode = mode)
+        project(state.tracker, state.period)
     }
 
     fun selectPeriod(type: PeriodType) = project(state.tracker, CalendarPeriod.containing(type, today()))
@@ -330,7 +337,10 @@ class TrackerViewModel(
         val services = temperature ?: return
         viewModelScope.launch {
             try {
-                services.temperatures.observe().collect {
+                merge(
+                    services.temperatures.observe().map { Unit },
+                    services.temperatures.observeDaily().map { Unit },
+                ).collect {
                     // Room emissions are invalidation signals; their payload may predate a location clear.
                     refreshTemperatureSnapshot(services)
                 }
@@ -347,10 +357,11 @@ class TrackerViewModel(
     /** Reloads cached means without accepting a result captured before a location change. */
     private suspend fun refreshTemperatureSnapshot(services: TemperatureServices) {
         try {
-            val (captured, temperatures) = withContext(ioDispatcher) { services.coordinator.snapshot() }
-            if (captured != services.coordinator.location.value) return
-            intervalMeans = temperatures
-            intervalMeansGeneration = captured.generation
+            val snapshot = withContext(ioDispatcher) { services.coordinator.snapshot() }
+            if (snapshot.location != services.coordinator.location.value) return
+            intervalMeans = snapshot.intervalMeans
+            dailyMeans = snapshot.dailyMeans
+            intervalMeansGeneration = snapshot.location.generation
             project(state.tracker, state.period)
         } catch (error: CancellationException) {
             throw error
@@ -504,6 +515,7 @@ class TrackerViewModel(
                         acceptCommittedSnapshot(result.snapshot)
                         finishReplacement(request, null)
                         scheduleReminderAfterSubmission()
+                        temperature?.checks?.requestCheck()
                     }
                 }
             } catch (error: ReadingStorageException) {
@@ -640,12 +652,22 @@ class TrackerViewModel(
             .mapIndexed { index, installation -> installation.id to index }.toMap()
         val readings = tracker.readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { installations.getValue(it.installationId) })
         val weatherLocation = temperature?.coordinator?.location?.value
-        val projected = TemperatureAggregation.temperaturesByConsumptionDate(
-            readings, intervalMeans,
-            weatherLocation?.takeIf { it.cacheReady && it.generation == intervalMeansGeneration }?.location,
+        val location = weatherLocation
+            ?.takeIf { it.cacheReady && it.generation == intervalMeansGeneration }
+            ?.location
+        val intervalTemperatures = TemperatureAggregation.temperaturesByConsumptionDate(
+            readings, intervalMeans, location,
         )
+        val dailyTemperatures = TemperatureAggregation.dailyTemperaturesByConsumptionDate(
+            readings, dailyMeans, location,
+        )
+        val selectedTemperatures = when (state.chartMode) {
+            ConsumptionChartMode.ABSOLUTE -> intervalTemperatures
+            ConsumptionChartMode.DAILY_ESTIMATE -> dailyTemperatures
+        }
         state = state.copy(readings = readings, tracker = tracker, period = period,
-            dashboard = dashboard(tracker, period), temperatures = projected)
+            dashboard = dashboard(tracker, period), temperatures = selectedTemperatures,
+            intervalTemperatures = intervalTemperatures, dailyTemperatures = dailyTemperatures)
     }
 
     companion object {

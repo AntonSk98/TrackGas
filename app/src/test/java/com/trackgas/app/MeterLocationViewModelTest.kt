@@ -4,9 +4,11 @@ import com.trackgas.app.temperature.LocationResolver
 import com.trackgas.app.temperature.MeterLocation
 import com.trackgas.app.temperature.MeterLocationStore
 import com.trackgas.app.temperature.NetworkMonitor
+import com.trackgas.app.temperature.DailyTemperatureEntity
 import com.trackgas.app.temperature.TemperatureCheckRequester
 import com.trackgas.app.temperature.TemperatureRepository
 import com.trackgas.app.temperature.TemperatureServices
+import com.trackgas.app.temperature.fingerprint
 import com.trackgas.app.tracking.*
 import java.io.IOException
 import java.time.LocalDate
@@ -157,6 +159,19 @@ class MeterLocationViewModelTest {
         runCurrent()
 
         assertEquals(temperature, vm.state.temperatures)
+        assertEquals(temperature, vm.state.intervalTemperatures)
+        assertTrue(vm.state.dailyTemperatures.isEmpty())
+
+        val dailyTemperature = mapOf(today to "9".toBigDecimal())
+        temperatures.emitDaily(listOf(DailyTemperatureEntity(today.toString(), saved.fingerprint(), "9")))
+        runCurrent()
+        assertEquals(dailyTemperature, vm.state.dailyTemperatures)
+        assertEquals(temperature, vm.state.temperatures)
+
+        vm.selectChartMode(ConsumptionChartMode.DAILY_ESTIMATE)
+        assertEquals(dailyTemperature, vm.state.temperatures)
+        vm.selectChartMode(ConsumptionChartMode.ABSOLUTE)
+        assertEquals(temperature, vm.state.temperatures)
         assertEquals(period, vm.state.period)
         assertEquals(TrackerTab.HISTORY, vm.state.tab)
     }
@@ -267,19 +282,33 @@ class MeterLocationViewModelTest {
 
     private class FakeTemperatureRepository : TemperatureRepository {
         private val state = MutableStateFlow<List<com.trackgas.app.temperature.IntervalTemperatureEntity>>(emptyList())
+        private val dailyState = MutableStateFlow<List<com.trackgas.app.temperature.DailyTemperatureEntity>>(emptyList())
         private var committed = state.value
         override fun observe() = state
         override suspend fun stored() = committed
+        override fun observeDaily() = dailyState
+        override suspend fun storedDaily() = dailyState.value
+        override suspend fun pruneObsolete() = Unit
         override suspend fun storeIfCurrent(temperature: com.trackgas.app.temperature.IntervalTemperatureEntity): Boolean {
             emit(committed + temperature)
             return true
         }
+        override suspend fun storeDailyIfCurrent(temperature: com.trackgas.app.temperature.DailyTemperatureEntity): Boolean {
+            dailyState.value = dailyState.value.filterNot {
+                it.date == temperature.date && it.location == temperature.location
+            } + temperature
+            return true
+        }
         override suspend fun deleteAll() {
             emit(emptyList())
+            dailyState.value = emptyList()
         }
         fun emit(temperatures: List<com.trackgas.app.temperature.IntervalTemperatureEntity>) {
             committed = temperatures
             state.value = temperatures
+        }
+        fun emitDaily(temperatures: List<com.trackgas.app.temperature.DailyTemperatureEntity>) {
+            dailyState.value = temperatures
         }
         fun emitStale(temperatures: List<com.trackgas.app.temperature.IntervalTemperatureEntity>) {
             state.value = temperatures

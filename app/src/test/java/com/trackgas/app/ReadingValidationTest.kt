@@ -143,4 +143,38 @@ class ReadingValidationTest {
             "added",
         ) as ReadingValidation.Accepted).candidate.installationId)
     }
+
+    @Test fun legacyImportedMetersWithoutStartDatesRouteNewReadsToTheLatestHistory() {
+        val oldMeter = MeterInstallation("old")
+        val currentMeter = MeterInstallation("current")
+        val oldDate = LocalDate.parse("2025-10-10")
+        val currentDate = LocalDate.parse("2026-11-14")
+        val addDate = currentDate.plusDays(1)
+        val tracker = TrackerData(
+            readings = listOf(
+                Reading("old-1", oldDate, BigDecimal("29303"), oldMeter.id),
+                Reading("old-2", oldDate.plusDays(1), BigDecimal("29310"), oldMeter.id),
+                Reading("current-1", currentDate.minusDays(1), BigDecimal("1502"), currentMeter.id),
+                Reading("current-2", currentDate, BigDecimal("1505"), currentMeter.id),
+            ),
+            installations = listOf(oldMeter, currentMeter),
+        )
+
+        assertEquals(currentMeter, installationForDate(tracker, addDate))
+        val accepted = evaluateSave(
+            tracker,
+            testAdd(addDate, parseMeter("1600", Locale.US), addDate),
+            "new-reading",
+        ) as ReadingValidation.Accepted
+        assertEquals(currentMeter.id, accepted.candidate.installationId)
+        assertNull(readingCollectionViolation(tracker.copy(readings = tracker.readings + accepted.candidate)))
+
+        val highValue = evaluateSave(
+            tracker,
+            testAdd(addDate, parseMeter("35000", Locale.US), addDate),
+            "high-reading",
+        ) as ReadingValidation.Accepted
+        assertEquals(currentMeter.id, highValue.candidate.installationId)
+        assertNull(readingCollectionViolation(tracker.copy(readings = tracker.readings + highValue.candidate)))
+    }
 }

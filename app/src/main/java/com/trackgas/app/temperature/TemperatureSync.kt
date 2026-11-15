@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.first
 /** Requests best-effort backfills and invalidates cached temperatures when the location changes. */
 interface TemperatureCheckRequester {
     fun requestCheck()
-
 }
 
 /** Conflates app and connectivity events into best-effort, batched temperature backfills. */
@@ -44,6 +43,9 @@ class TemperatureSync(
 
     private suspend fun checkNow() {
         bestEffort("Temperature check failed") {
+            bestEffort("Temperature cache cleanup failed") {
+                temperatureStore.pruneObsolete()
+            }
             if (!networkMonitor.isOnline()) return@bestEffort
             val captured = coordinator.location.value
             if (!captured.cacheReady) return@bestEffort
@@ -59,6 +61,29 @@ class TemperatureSync(
                             interval.start.epochSecond, interval.end.epochSecond, location.fingerprint(), mean.toString(),
                         ))
                     }
+                }
+            }
+            for (range in missingDailyDateRanges(
+                tracker.readings,
+                temperatureStore.storedDaily(),
+                location.fingerprint(),
+            )) {
+                var start = range.start
+                while (start <= range.endInclusive) {
+                    val endInclusive = minOf(start.plusDays(MAX_DAILY_DAYS_PER_REQUEST - 1), range.endInclusive)
+                    bestEffort("Open-Meteo daily temperature request failed") {
+                        val means = provider.fetchDailyMeans(location, start, endInclusive)
+                        require(means.keys.all { it in start..endInclusive }) {
+                            "Daily temperatures must be within the requested dates"
+                        }
+                        means.forEach { (date, celsius) ->
+                            coordinator.publishDaily(
+                                captured,
+                                DailyTemperatureEntity(date.toString(), location.fingerprint(), celsius.toString()),
+                            )
+                        }
+                    }
+                    start = endInclusive.plusDays(1)
                 }
             }
         }
@@ -80,6 +105,7 @@ class TemperatureSync(
     }
 
     private companion object {
+        const val MAX_DAILY_DAYS_PER_REQUEST = 31L
         val logger: Logger = Logger.getLogger(TemperatureSync::class.java.name)
     }
 }

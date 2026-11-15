@@ -37,7 +37,7 @@ internal data class TemperatureChartEntry(
 )
 
 internal fun ChartProjection.temperatureOnly(): ChartProjection =
-    copy(scale = BigDecimal.ZERO, entries = emptyList(), mode = ConsumptionChartMode.ABSOLUTE)
+    copy(scale = BigDecimal.ZERO, entries = emptyList())
 
 /** Groups covered daily Month buckets into clipped Monday–Sunday display rows. */
 internal fun weeklyRows(period: CalendarPeriod, buckets: List<ConsumptionBucket>): List<ConsumptionBucket> {

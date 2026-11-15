@@ -123,7 +123,7 @@ private fun ProjectedCharts(
         )
         val presentation = rememberChartPresentation(projection, locale, maxWidth.value, labelStyle)
         Column {
-            // A gas snapshot owns its model and scale; temperature does not depend on mode.
+            // Gas values own their scale; the temperature source follows the selected mode.
             key(projection) {
                 if (projection.entries.isEmpty()) {
                     Text(
@@ -138,10 +138,18 @@ private fun ProjectedCharts(
             }
             if (projection.temperatures.isNotEmpty()) {
                 averageTemperature?.let { mean ->
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(
+                        modifier = Modifier.semantics(mergeDescendants = true) {},
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
                         Text(
                             stringResource(R.string.temperature_title),
                             style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            stringResource(projection.mode.temperatureBasisResource),
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
@@ -631,4 +639,10 @@ internal val ConsumptionChartMode.descriptionResource: Int
     get() = when (this) {
         ConsumptionChartMode.DAILY_ESTIMATE -> R.string.chart_daily_estimate_description
         ConsumptionChartMode.ABSOLUTE -> R.string.volume
+    }
+
+internal val ConsumptionChartMode.temperatureBasisResource: Int
+    get() = when (this) {
+        ConsumptionChartMode.DAILY_ESTIMATE -> R.string.temperature_basis_daily
+        ConsumptionChartMode.ABSOLUTE -> R.string.temperature_basis_interval
     }

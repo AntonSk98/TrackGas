@@ -5,6 +5,7 @@ import com.trackgas.app.tracking.descriptionResource
 import com.trackgas.app.tracking.inspectionResource
 import com.trackgas.app.tracking.labelResource
 import com.trackgas.app.tracking.titleResource
+import com.trackgas.app.tracking.temperatureBasisResource
 import com.trackgas.app.tracking.volumeResource
 import java.io.File
 import java.util.Locale
@@ -25,6 +26,10 @@ class LocalizedStringResourcesTest {
         assertEquals("Tagesprojektion", german.getValue("chart_daily_title").text)
         assertEquals("Interval consumption", english.getValue("chart_absolute_title").text)
         assertEquals("Intervallverbrauch", german.getValue("chart_absolute_title").text)
+        assertEquals("Mean between readings", english.getValue("temperature_basis_interval").text)
+        assertEquals("Mittel zwischen Ablesungen", german.getValue("temperature_basis_interval").text)
+        assertEquals("Daily mean", english.getValue("temperature_basis_daily").text)
+        assertEquals("Tagesmittel", german.getValue("temperature_basis_daily").text)
         for (strings in listOf(english, german)) {
             for (key in listOf("chart_daily_title", "chart_absolute_title", "chart_mode_daily", "chart_mode_absolute")) {
                 assertFalse(strings.getValue(key).text.contains("24"))
@@ -53,6 +58,8 @@ class LocalizedStringResourcesTest {
         assertEquals(R.string.volume, ConsumptionChartMode.ABSOLUTE.volumeResource)
         assertEquals(R.string.volume, ConsumptionChartMode.ABSOLUTE.inspectionResource)
         assertEquals(R.string.volume, ConsumptionChartMode.ABSOLUTE.descriptionResource)
+        assertEquals(R.string.temperature_basis_daily, ConsumptionChartMode.DAILY_ESTIMATE.temperatureBasisResource)
+        assertEquals(R.string.temperature_basis_interval, ConsumptionChartMode.ABSOLUTE.temperatureBasisResource)
     }
 
     @Test

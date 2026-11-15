@@ -21,6 +21,8 @@
     <string name="meter_location_resolving">Searching…</string>
     <string name="temperature">%1$s °C</string>
     <string name="temperature_title">Temperature</string>
+    <string name="temperature_basis_interval">Mean between readings</string>
+    <string name="temperature_basis_daily">Daily mean</string>
     <string name="temperature_axis">%1$s °C</string>
     <string name="language">Language</string>
     <string name="language_english" translatable="false">English</string>

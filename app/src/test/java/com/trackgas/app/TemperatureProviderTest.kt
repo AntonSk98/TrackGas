@@ -41,6 +41,51 @@ class TemperatureProviderTest {
         body = """{"hourly":{"time":[0],"temperature_2m":[null]}}"""
         try { provider.fetch(location, date, date); fail() } catch (_: IllegalArgumentException) {}
     }
+
+    @Test fun dailyRequestUsesLocationLocalDatesAndRejectsHttpFailuresAndOutOfBoundsDates() = runTest {
+        var url: java.net.URL? = null
+        var code = 200
+        var body = """{"daily":{"time":["2026-11-01"],"temperature_2m_mean":[4.5]}}"""
+        val provider = OpenMeteoTemperatureProvider { request ->
+            url = request
+            object : java.net.HttpURLConnection(request) {
+                override fun connect() = Unit
+                override fun disconnect() = Unit
+                override fun usingProxy() = false
+                override fun getResponseCode() = code
+                override fun getInputStream() = body.byteInputStream()
+            }
+        }
+        val date = LocalDate.parse("2026-11-01")
+        assertEquals(mapOf(date to BigDecimal("4.5")), provider.fetchDailyMeans(location, date, date))
+        assertTrue(url.toString().contains("daily=temperature_2m_mean"))
+        assertTrue(url.toString().contains("timezone=auto"))
+        assertTrue(url.toString().contains("temperature_unit=celsius"))
+        assertTrue(url.toString().contains("start_date=2026-11-01"))
+        code = 503
+        try { provider.fetchDailyMeans(location, date, date); fail() } catch (_: IOException) {}
+        code = 200
+        body = """{"daily":{"time":["2026-11-02"],"temperature_2m_mean":[4]}}"""
+        try { provider.fetchDailyMeans(location, date, date); fail() } catch (_: IllegalArgumentException) {}
+    }
+
+    @Test fun dailyParserSkipsMissingMeansPreservesPrecisionAndRejectsMalformedDates() {
+        val first = LocalDate.parse("2026-11-01")
+        val second = first.plusDays(1)
+        val result = OpenMeteoTemperatureProvider.parseDailyResponse(
+            """{"daily":{"time":["2026-11-01","2026-11-02"],"temperature_2m_mean":[4.12500001,null]}}""",
+            first..second,
+        )
+        assertEquals(mapOf(first to BigDecimal("4.12500001")), result)
+        for (json in listOf(
+            """{"daily":{"time":["2026-11-01"],"temperature_2m_mean":[]}}""",
+            """{"daily":{"time":["2026-11-01","2026-11-01"],"temperature_2m_mean":[4,null]}}""",
+            """{"daily":{"time":["2026-11-03"],"temperature_2m_mean":[4]}}""",
+            """{"daily":{"time":["invalid"],"temperature_2m_mean":[4]}}""",
+            """{"daily":{"time":["2026-11-01"],"temperature_2m_mean":["NaN"]}}""",
+            "not json",
+        )) assertThrows(Exception::class.java) { OpenMeteoTemperatureProvider.parseDailyResponse(json, first..second) }
+    }
     private val location = MeterLocation("Berlin", 52.52, 13.405)
     private val berlin = ZoneId.of("Europe/Berlin")
     private fun interval(start: String, end: String): TemperatureInterval {
@@ -157,6 +202,7 @@ class TemperatureProviderTest {
 
 internal fun hourlyProvider(
     requests: MutableList<DateRange> = mutableListOf(),
+    dailyRequests: MutableList<DateRange>? = null,
     value: (Instant) -> BigDecimal?,
 ) = object : TemperatureProvider {
     override suspend fun fetch(location: MeterLocation, start: LocalDate, endInclusive: LocalDate): Map<Instant, BigDecimal> {
@@ -167,6 +213,21 @@ internal fun hourlyProvider(
             while (hour < end) {
                 value(hour)?.let { put(hour, it) }
                 hour = hour.plus(1, ChronoUnit.HOURS)
+            }
+        }
+    }
+
+    override suspend fun fetchDailyMeans(
+        location: MeterLocation,
+        start: LocalDate,
+        endInclusive: LocalDate,
+    ): Map<LocalDate, BigDecimal> {
+        (dailyRequests ?: requests) += DateRange(start, endInclusive)
+        return buildMap {
+            var date = start
+            while (date <= endInclusive) {
+                value(date.atTime(12, 0).toInstant(ZoneOffset.UTC))?.let { put(date, it) }
+                date = date.plusDays(1)
             }
         }
     }

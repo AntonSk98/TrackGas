@@ -147,14 +147,26 @@ internal fun csvImportCandidate(
     val affected = rows.map { it.installationId }.toSet()
     val retained = base.readings.filterNot { it.installationId in affected }
     val installationIds = base.installations.mapTo(mutableSetOf()) { it.id }
-    val newInstallations = affected.filter { installationIds.add(it) }.map { MeterInstallation(it) }
+    val firstReadingDates = rows.groupBy { it.installationId }.mapValues { (_, meterRows) ->
+        meterRows.minOf { it.date }
+    }
+    val newInstallations = affected.filter { installationIds.add(it) }.map {
+        MeterInstallation(it, firstReadingDates.getValue(it))
+    }
+    val updatedInstallations = base.installations.map { installation ->
+        if (installation.id in affected && installation.startDate == null) {
+            installation.copy(startDate = firstReadingDates.getValue(installation.id))
+        } else {
+            installation
+        }
+    }
     val identities = retained.mapTo(mutableSetOf()) { it.id }
     val imported = rows.map { row ->
         var id: String
         do { id = newReadingId() } while (id.isBlank() || !identities.add(id))
         Reading(id, row.date, row.cubicMetres, row.installationId, row.note, row.observedAt, row.zone)
     }
-    return base.copy(readings = retained + imported, installations = base.installations + newInstallations)
+    return base.copy(readings = retained + imported, installations = updatedInstallations + newInstallations)
 }
 
 internal sealed interface CsvImportCandidateValidation {

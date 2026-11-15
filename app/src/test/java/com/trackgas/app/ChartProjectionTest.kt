@@ -64,16 +64,17 @@ class ChartProjectionTest {
         val absolute = chartProjection(october, data, temperatures)
         val daily = chartProjection(october, data, temperatures, ConsumptionChartMode.DAILY_ESTIMATE,
             mapOf(LocalDate.parse("2026-10-02") to BigDecimal("4")))
-        val temperature = absolute.temperatureOnly()
+        val absoluteTemperature = absolute.temperatureOnly()
+        val dailyTemperature = daily.temperatureOnly()
         assertNotEquals(absolute, daily)
-        assertEquals(temperature, daily.temperatureOnly())
-        assertEquals(temperature, daily.copy(entries = emptyList(), scale = BigDecimal("99")).temperatureOnly())
-        assertEquals(absolute.temperatures, temperature.temperatures)
-        assertTrue(temperature.entries.isEmpty())
-        assertEquals(BigDecimal.ZERO, temperature.scale)
-        assertNotEquals(temperature, chartProjection(october, data,
+        assertNotEquals(absoluteTemperature, dailyTemperature)
+        assertEquals(dailyTemperature, daily.copy(entries = emptyList(), scale = BigDecimal("99")).temperatureOnly())
+        assertEquals(absolute.temperatures, absoluteTemperature.temperatures)
+        assertTrue(absoluteTemperature.entries.isEmpty())
+        assertEquals(BigDecimal.ZERO, absoluteTemperature.scale)
+        assertNotEquals(absoluteTemperature, chartProjection(october, data,
             mapOf(LocalDate.parse("2026-10-02") to BigDecimal("9"))).temperatureOnly())
-        assertNotEquals(temperature, temperature.copy(period = october.navigate(1)))
+        assertNotEquals(absoluteTemperature, absoluteTemperature.copy(period = october.navigate(1)))
     }
 
     @Test fun dailyValuesChangeChartOnlyAndRetainAbsoluteRowsTotalsAndTemperaturePoints() {

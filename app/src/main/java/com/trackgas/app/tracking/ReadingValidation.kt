@@ -32,10 +32,21 @@ sealed interface ReadingValidation {
 fun validateReadingDate(readings: List<Reading>, id: String?, date: LocalDate?, today: LocalDate): ReadingError? =
     validateReadingDate(TrackerData(readings), id, date, today)
 
-/** Selects the installation that was current on the reading date. */
+/** Selects the installation current on the date, inferring legacy starts from first readings. */
 fun installationForDate(tracker: TrackerData, date: LocalDate): MeterInstallation? {
-    return tracker.installations.filter { it.startDate == null || it.startDate <= date }
-        .maxWithOrNull(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
+    val firstReadingDates = tracker.readings.groupBy { it.installationId }
+        .mapValues { (_, readings) -> readings.minOf { it.date } }
+    val eligible = tracker.installations.mapNotNull { installation ->
+        val inferredStart = installation.startDate ?: firstReadingDates[installation.id]
+        if (inferredStart != null && inferredStart > date) {
+            null
+        } else {
+            installation to inferredStart
+        }
+    }
+    return eligible.maxWithOrNull(
+        compareBy<Pair<MeterInstallation, LocalDate?>> { it.second != null }.thenBy { it.second },
+    )?.first ?: tracker.installations.firstOrNull { it.startDate == null }
 }
 
 fun validateReadingDate(tracker: TrackerData, id: String?, date: LocalDate?, today: LocalDate): ReadingError? {

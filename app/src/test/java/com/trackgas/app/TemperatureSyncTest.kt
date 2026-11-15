@@ -23,14 +23,48 @@ class TemperatureSyncTest {
         val repo = WeatherReadingRepository(rows())
         val store = WeatherMemoryStore(repo)
         val requests = mutableListOf<DateRange>()
+        val dailyRequests = mutableListOf<DateRange>()
         val sync = TemperatureSync(repo, WeatherLocationStore(location), store, WeatherNetwork(),
-            hourlyProvider(requests) { BigDecimal("4") }, backgroundScope, StandardTestDispatcher(testScheduler))
+            hourlyProvider(requests, dailyRequests) { BigDecimal("4") },
+            backgroundScope, StandardTestDispatcher(testScheduler))
         sync.requestCheck(); runCurrent()
         assertEquals(2, requests.size)
+        assertEquals(listOf(DateRange(date.plusDays(1), date.plusDays(2))), dailyRequests)
         assertEquals(2, store.values.value.size)
+        assertEquals(2, store.dailyValues.value.size)
         sync.requestCheck(); runCurrent()
         assertEquals(2, requests.size)
+        assertEquals(1, dailyRequests.size)
         assertEquals(BigDecimal("4"), BigDecimal(store.values.value.first().celsius))
+        sync.close()
+    }
+
+    @Test fun newlyCoveredDatesAreFetchedWithoutRefetchingExistingDailyMeans() = runTest {
+        val repo = WeatherReadingRepository(rows().take(2))
+        val store = WeatherMemoryStore(repo)
+        val dailyRequests = mutableListOf<DateRange>()
+        val sync = TemperatureSync(
+            repo,
+            WeatherLocationStore(location),
+            store,
+            WeatherNetwork(),
+            hourlyProvider(dailyRequests = dailyRequests) { BigDecimal.ONE },
+            backgroundScope,
+            StandardTestDispatcher(testScheduler),
+        )
+        sync.requestCheck(); runCurrent()
+        assertEquals(listOf(DateRange(date.plusDays(1), date.plusDays(1))), dailyRequests)
+
+        repo.set(rows())
+        sync.requestCheck(); runCurrent()
+        assertEquals(
+            listOf(
+                DateRange(date.plusDays(1), date.plusDays(1)),
+                DateRange(date.plusDays(2), date.plusDays(2)),
+            ),
+            dailyRequests,
+        )
+        assertEquals(setOf(date.plusDays(1).toString(), date.plusDays(2).toString()), store.dailyValues.value.map { it.date }.toSet())
         sync.close()
     }
 
@@ -41,7 +75,24 @@ class TemperatureSyncTest {
                 observedAt = date.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)),
         )
         val independent = listOf(rows()[0], rows()[1].copy(installationId = "other"))
-        for ((readings, place) in listOf(short to location, independent to location, rows() to null)) {
+        val shortRepo = WeatherReadingRepository(short)
+        val intervalRequests = mutableListOf<DateRange>()
+        val dailyRequests = mutableListOf<DateRange>()
+        val shortSync = TemperatureSync(
+            shortRepo,
+            WeatherLocationStore(location),
+            WeatherMemoryStore(shortRepo),
+            WeatherNetwork(),
+            hourlyProvider(intervalRequests, dailyRequests) { BigDecimal.ONE },
+            backgroundScope,
+            StandardTestDispatcher(testScheduler),
+        )
+        shortSync.requestCheck(); runCurrent()
+        assertTrue(intervalRequests.isEmpty())
+        assertEquals(listOf(DateRange(date.plusDays(1), date.plusDays(1))), dailyRequests)
+        shortSync.close()
+
+        for ((readings, place) in listOf(independent to location, rows() to null)) {
             val repo = WeatherReadingRepository(readings)
             val sync = TemperatureSync(repo, WeatherLocationStore(place), WeatherMemoryStore(repo), WeatherNetwork(),
                 hourlyProvider { error("Unexpected request") }, backgroundScope, StandardTestDispatcher(testScheduler))
@@ -55,19 +106,23 @@ class TemperatureSyncTest {
         val store = WeatherMemoryStore(repo)
         val network = WeatherNetwork(false)
         val requests = mutableListOf<DateRange>()
-        val provider = hourlyProvider(requests) { BigDecimal.ONE }
+        val dailyRequests = mutableListOf<DateRange>()
+        val provider = hourlyProvider(requests, dailyRequests) { BigDecimal.ONE }
         var sync = TemperatureSync(repo, WeatherLocationStore(location), store, network, provider,
             backgroundScope, StandardTestDispatcher(testScheduler))
         sync.requestCheck(); runCurrent()
         assertTrue(requests.isEmpty())
+        assertTrue(dailyRequests.isEmpty())
         network.online = true; network.listener?.invoke(); runCurrent()
         assertEquals(1, requests.size)
+        assertEquals(1, dailyRequests.size)
         sync.close()
         store.values.value = emptyList()
         sync = TemperatureSync(repo, WeatherLocationStore(location), store, network, provider,
             backgroundScope, StandardTestDispatcher(testScheduler))
         sync.requestCheck(); runCurrent()
         assertEquals(2, requests.size)
+        assertEquals(1, dailyRequests.size)
         sync.close()
     }
 
@@ -79,9 +134,11 @@ class TemperatureSyncTest {
             hourlyProvider { if (available) BigDecimal.ONE else null }, backgroundScope, StandardTestDispatcher(testScheduler))
         sync.requestCheck(); runCurrent()
         assertTrue(store.values.value.isEmpty())
+        assertTrue(store.dailyValues.value.isEmpty())
         available = true
         sync.requestCheck(); runCurrent()
         assertEquals(1, store.values.value.size)
+        assertEquals(1, store.dailyValues.value.size)
         sync.close()
         store.values.value = emptyList()
         val suspended = CompletableDeferred<Unit>()
@@ -90,6 +147,9 @@ class TemperatureSyncTest {
                 suspended.await()
                 return hourlyProvider { BigDecimal.ONE }.fetch(location, start, endInclusive)
             }
+
+            override suspend fun fetchDailyMeans(location: MeterLocation, start: LocalDate, endInclusive: LocalDate) =
+                hourlyProvider { BigDecimal.ONE }.fetchDailyMeans(location, start, endInclusive)
         }
         val cancelled = TemperatureSync(repo, WeatherLocationStore(location), store, WeatherNetwork(), waiting,
             backgroundScope, StandardTestDispatcher(testScheduler))
@@ -115,6 +175,9 @@ class TemperatureSyncTest {
                     gate.await()
                     return hourlyProvider { BigDecimal.ONE }.fetch(location, start, endInclusive)
                 }
+
+                override suspend fun fetchDailyMeans(location: MeterLocation, start: LocalDate, endInclusive: LocalDate) =
+                    hourlyProvider { BigDecimal.ONE }.fetchDailyMeans(location, start, endInclusive)
             }
             val sync = TemperatureSync(repo, WeatherLocationStore(location), store, WeatherNetwork(), waiting,
                 backgroundScope, StandardTestDispatcher(testScheduler))
@@ -124,6 +187,64 @@ class TemperatureSyncTest {
             assertTrue(store.values.value.isEmpty())
             sync.close()
         }
+    }
+
+    @Test fun obsoleteDailyResponseIsNotStoredAfterItsDateIsNoLongerCovered() = runTest {
+        val repo = WeatherReadingRepository(rows().take(2))
+        val store = WeatherMemoryStore(repo)
+        val gate = CompletableDeferred<Unit>()
+        val provider = object : TemperatureProvider {
+            override suspend fun fetch(
+                location: MeterLocation,
+                start: LocalDate,
+                endInclusive: LocalDate,
+            ) = hourlyProvider { BigDecimal.ONE }.fetch(location, start, endInclusive)
+
+            override suspend fun fetchDailyMeans(
+                location: MeterLocation,
+                start: LocalDate,
+                endInclusive: LocalDate,
+            ): Map<LocalDate, BigDecimal> {
+                gate.await()
+                return mapOf(start to BigDecimal.ONE)
+            }
+        }
+        val sync = TemperatureSync(
+            repo, WeatherLocationStore(location), store, WeatherNetwork(), provider,
+            backgroundScope, StandardTestDispatcher(testScheduler),
+        )
+        sync.requestCheck(); runCurrent()
+        repo.set(emptyList())
+        gate.complete(Unit); runCurrent()
+        assertTrue(store.dailyValues.value.isEmpty())
+        sync.close()
+    }
+
+    @Test fun dailyRequestsAreBatchedToAtMostThirtyOneDays() = runTest {
+        val lastDate = date.plusDays(35)
+        val repo = WeatherReadingRepository(listOf(
+            Reading("first", date, BigDecimal.ZERO),
+            Reading("last", lastDate, BigDecimal.ONE),
+        ))
+        val dailyRequests = mutableListOf<DateRange>()
+        val sync = TemperatureSync(
+            repo,
+            WeatherLocationStore(location),
+            WeatherMemoryStore(repo),
+            WeatherNetwork(),
+            hourlyProvider(dailyRequests = dailyRequests) { BigDecimal.ONE },
+            backgroundScope,
+            StandardTestDispatcher(testScheduler),
+        )
+        sync.requestCheck(); runCurrent()
+        assertEquals(
+            listOf(
+                DateRange(date.plusDays(1), date.plusDays(31)),
+                DateRange(date.plusDays(32), lastDate),
+            ),
+            dailyRequests,
+        )
+        sync.close()
     }
 
     @Test fun locationGenerationRejectsAtoBtoAAndRestartFiltersOldProvenance() = runTest {
@@ -176,12 +297,12 @@ class TemperatureSyncTest {
         for (place in listOf(location.copy(displayName = "Other"), location)) {
             try { coordinator.save(place); fail() } catch (_: IOException) {}
             assertFalse(coordinator.location.value.cacheReady)
-            assertTrue(coordinator.snapshot().second.isEmpty())
+            assertTrue(coordinator.snapshot().intervalMeans.isEmpty())
         }
         store.failClear = false
         coordinator.save(location)
         assertTrue(coordinator.location.value.cacheReady)
-        assertTrue(coordinator.snapshot().second.isEmpty())
+        assertTrue(coordinator.snapshot().intervalMeans.isEmpty())
     }
 
     @Test fun locationChangeDuringHttpRejectsTheOldResponseAndRefreshesOnlyNewLocation() = runTest {
@@ -197,6 +318,12 @@ class TemperatureSyncTest {
                 if (places.size == 1) gate.await()
                 return hourlyProvider { BigDecimal.ONE }.fetch(location, start, endInclusive)
             }
+
+            override suspend fun fetchDailyMeans(location: MeterLocation, start: LocalDate, endInclusive: LocalDate): Map<LocalDate, BigDecimal> {
+                places += location
+                if (places.size == 1) gate.await()
+                return hourlyProvider { BigDecimal.ONE }.fetchDailyMeans(location, start, endInclusive)
+            }
         }
         val sync = TemperatureSync(repo, preferences, store, WeatherNetwork(), provider,
             backgroundScope, StandardTestDispatcher(testScheduler), coordinator)
@@ -206,7 +333,7 @@ class TemperatureSyncTest {
         gate.complete(Unit); runCurrent()
         assertTrue(store.values.value.isEmpty())
         sync.requestCheck(); runCurrent()
-        assertEquals(listOf(location, other), places)
+        assertEquals(listOf(location, location, other, other), places)
         assertEquals(other.fingerprint(), store.values.value.single().location)
         sync.close()
     }
@@ -255,17 +382,30 @@ internal class WeatherReadingRepository(readings: List<com.trackgas.app.tracking
 
 internal class WeatherMemoryStore(private val readings: WeatherReadingRepository) : TemperatureRepository {
     val values = MutableStateFlow<List<IntervalTemperatureEntity>>(emptyList())
+    val dailyValues = MutableStateFlow<List<DailyTemperatureEntity>>(emptyList())
     var failClear = false
     override fun observe() = values
     override suspend fun stored() = values.value
+    override fun observeDaily() = dailyValues
+    override suspend fun storedDaily() = dailyValues.value
+    override suspend fun pruneObsolete() = Unit
     override suspend fun storeIfCurrent(temperature: IntervalTemperatureEntity): Boolean {
         if (readingIntervals(readings.current()).none { it.matches(temperature) }) return false
         values.value = values.value.filterNot { it.earlierId == temperature.earlierId && it.laterId == temperature.laterId } + temperature
         return true
     }
+    override suspend fun storeDailyIfCurrent(temperature: DailyTemperatureEntity): Boolean {
+        val date = LocalDate.parse(temperature.date)
+        if (readingIntervals(readings.current()).none { date > it.earlier.date && date <= it.later.date }) return false
+        dailyValues.value = dailyValues.value.filterNot {
+            it.date == temperature.date && it.location == temperature.location
+        } + temperature
+        return true
+    }
     override suspend fun deleteAll() {
         if (failClear) throw IOException()
         values.value = emptyList()
+        dailyValues.value = emptyList()
     }
 }
 

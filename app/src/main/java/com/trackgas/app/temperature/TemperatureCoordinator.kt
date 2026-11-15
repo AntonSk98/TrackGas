@@ -9,6 +9,12 @@ import kotlinx.coroutines.withContext
 
 data class WeatherLocation(val location: MeterLocation?, val generation: Long, val cacheReady: Boolean = true)
 
+data class TemperatureCacheSnapshot(
+    val location: WeatherLocation,
+    val intervalMeans: List<IntervalTemperatureEntity>,
+    val dailyMeans: List<DailyTemperatureEntity>,
+)
+
 /** Serializes only preference changes and guarded publication, never network requests. */
 class TemperatureCoordinator(
     private val store: MeterLocationStore,
@@ -39,7 +45,16 @@ class TemperatureCoordinator(
         else temperatures.storeIfCurrent(mean)
     }
 
-    suspend fun snapshot(): Pair<WeatherLocation, List<IntervalTemperatureEntity>> = mutex.withLock {
-        current.value to if (needsClear) emptyList() else temperatures.stored()
+    suspend fun publishDaily(captured: WeatherLocation, mean: DailyTemperatureEntity): Boolean = mutex.withLock {
+        if (needsClear || current.value != captured || captured.location?.fingerprint() != mean.location) false
+        else temperatures.storeDailyIfCurrent(mean)
+    }
+
+    suspend fun snapshot(): TemperatureCacheSnapshot = mutex.withLock {
+        TemperatureCacheSnapshot(
+            current.value,
+            if (needsClear) emptyList() else temperatures.stored(),
+            if (needsClear) emptyList() else temperatures.storedDaily(),
+        )
     }
 }

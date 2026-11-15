@@ -278,6 +278,10 @@ class TrackerViewModelTest {
                     override fun observe() = emptyFlow<List<com.trackgas.app.temperature.IntervalTemperatureEntity>>()
                     override suspend fun stored() = emptyList<com.trackgas.app.temperature.IntervalTemperatureEntity>()
                     override suspend fun storeIfCurrent(temperature: com.trackgas.app.temperature.IntervalTemperatureEntity) = true
+                    override fun observeDaily() = emptyFlow<List<com.trackgas.app.temperature.DailyTemperatureEntity>>()
+                    override suspend fun storedDaily() = emptyList<com.trackgas.app.temperature.DailyTemperatureEntity>()
+                    override suspend fun storeDailyIfCurrent(temperature: com.trackgas.app.temperature.DailyTemperatureEntity) = true
+                    override suspend fun pruneObsolete() = Unit
                     override suspend fun deleteAll() = Unit
                 },
                 checks = checks,

@@ -37,6 +37,21 @@ object TemperatureAggregation {
         }
     }
 
+    /** Uses full-day values only for dates covered by gas consumption. */
+    fun dailyTemperaturesByConsumptionDate(
+        readings: List<Reading>,
+        dailyMeans: List<DailyTemperatureEntity>,
+        location: MeterLocation?,
+    ): Map<LocalDate, BigDecimal> {
+        val locationFingerprint = location?.fingerprint() ?: return emptyMap()
+        val coveredDates = coveredConsumptionDates(readings).toSet()
+        return dailyMeans.asSequence()
+            .filter { it.location == locationFingerprint }
+            .map { LocalDate.parse(it.date) to BigDecimal(it.celsius) }
+            .filter { (date, _) -> date in coveredDates }
+            .toMap()
+    }
+
     fun mean(range: ClosedRange<LocalDate>, temperatures: Map<LocalDate, BigDecimal>): BigDecimal? {
         val values = temperatures.asSequence()
             .filter { (date, _) -> date in range }

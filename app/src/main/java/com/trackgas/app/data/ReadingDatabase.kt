@@ -11,6 +11,7 @@ import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Update
 import com.trackgas.app.tracking.*
+import com.trackgas.app.temperature.DailyTemperatureEntity
 import com.trackgas.app.temperature.IntervalTemperatureEntity
 import com.trackgas.app.temperature.TemperatureDao
 import java.math.BigDecimal
@@ -121,8 +122,8 @@ interface ReadingDao {
 data class StoredReadingDateRange(val startDate: String?, val endDate: String?)
 
 @Database(
-    entities = [ReadingEntity::class, InstallationEntity::class, IntervalTemperatureEntity::class],
-    version = 6,
+    entities = [ReadingEntity::class, InstallationEntity::class, IntervalTemperatureEntity::class, DailyTemperatureEntity::class],
+    version = 7,
     exportSchema = true,
 )
 abstract class ReadingDatabase : RoomDatabase() {

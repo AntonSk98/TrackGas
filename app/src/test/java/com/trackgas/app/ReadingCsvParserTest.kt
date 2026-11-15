@@ -194,6 +194,20 @@ class ReadingCsvParserTest {
         assertEquals(CsvImportField.METER_VALUE, error.field)
     }
 
+    @Test fun newMeterCanStartAtZeroAfterPreviousMeterEnds() {
+        val oldMeter = "647f4cc3-cc26-42b6-9a41-87dbf9aa6e71"
+        val newMeter = "f7377892-cb41-4404-9412-52951621df4d"
+        val csv = "meter_id;timestamp;timezone;meter_value;note\n" +
+            "$oldMeter;2025-11-24T08:00+01:00;Europe/Berlin;29567.056;\n" +
+            "$oldMeter;2025-11-25T08:00+01:00;Europe/Berlin;29577.348;\n" +
+            "$newMeter;2025-11-25T06:00+01:00;Europe/Berlin;0;\n" +
+            "$newMeter;2025-11-26T06:00+01:00;Europe/Berlin;7.661;\n"
+        val rows = (validateReadingCsv(csv, emptySet()) as CsvReadingValidation.Valid).rows
+        var id = 0
+        val result = validateCsvImportCandidate(TrackerData(), rows) { "new-${id++}" }
+        assertTrue(result is CsvImportCandidateValidation.Valid)
+    }
+
     @Test fun importCandidateKeepsOptionalNoteOnItsReading() {
         val meter = "11111111-1111-4111-8111-111111111111"
         val base = TrackerData()

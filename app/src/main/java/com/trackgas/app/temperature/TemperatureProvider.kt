@@ -18,9 +18,15 @@ interface TemperatureProvider {
         start: LocalDate,
         endInclusive: LocalDate,
     ): Map<Instant, BigDecimal>
+
+    suspend fun fetchDailyMeans(
+        location: MeterLocation,
+        start: LocalDate,
+        endInclusive: LocalDate,
+    ): Map<LocalDate, BigDecimal>
 }
 
-/** Retrieves archive hourly values; missing hours remain absent. */
+/** Retrieves archive hourly samples and location-local daily means. */
 class OpenMeteoTemperatureProvider(
     private val openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
 ) : TemperatureProvider {
@@ -39,6 +45,28 @@ class OpenMeteoTemperatureProvider(
             "timezone" to "UTC",
             "timeformat" to "unixtime",
         )
+        return parseResponse(request(parameters), start..endInclusive)
+    }
+
+    override suspend fun fetchDailyMeans(
+        location: MeterLocation,
+        start: LocalDate,
+        endInclusive: LocalDate,
+    ): Map<LocalDate, BigDecimal> {
+        require(!endInclusive.isBefore(start))
+        val parameters = linkedMapOf(
+            "latitude" to location.latitude.toString(),
+            "longitude" to location.longitude.toString(),
+            "start_date" to start.toString(),
+            "end_date" to endInclusive.toString(),
+            "daily" to "temperature_2m_mean",
+            "temperature_unit" to "celsius",
+            "timezone" to "auto",
+        )
+        return parseDailyResponse(request(parameters), start..endInclusive)
+    }
+
+    private fun request(parameters: Map<String, String>): String {
         val query = parameters.entries.joinToString("&") { (key, value) ->
             "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
         }
@@ -49,9 +77,7 @@ class OpenMeteoTemperatureProvider(
             connection.requestMethod = "GET"
             val responseCode = connection.responseCode
             if (responseCode !in 200..299) throw IOException("Open-Meteo returned HTTP $responseCode")
-            connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
-                parseResponse(reader.readText(), start..endInclusive)
-            }
+            connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
         } finally {
             connection.disconnect()
         }
@@ -80,6 +106,26 @@ class OpenMeteoTemperatureProvider(
                     put(date, temperature)
                 }
 
+            }
+        }
+
+        internal fun parseDailyResponse(
+            json: String,
+            bounds: ClosedRange<LocalDate>? = null,
+        ): Map<LocalDate, BigDecimal> {
+            val daily = JSONObject(json).getJSONObject("daily")
+            val dates = daily.getJSONArray("time")
+            val values = daily.getJSONArray("temperature_2m_mean")
+            require(dates.length() == values.length()) { "Open-Meteo returned misaligned daily data" }
+            val seen = mutableSetOf<LocalDate>()
+            return buildMap {
+                for (index in 0 until dates.length()) {
+                    val date = LocalDate.parse(dates.getString(index))
+                    require(bounds == null || date in bounds)
+                    require(seen.add(date)) { "Duplicate daily date" }
+                    if (values.isNull(index)) continue
+                    put(date, BigDecimal(values.get(index).toString()))
+                }
             }
         }
 
