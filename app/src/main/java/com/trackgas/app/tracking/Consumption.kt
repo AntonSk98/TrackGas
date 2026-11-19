@@ -69,9 +69,15 @@ internal fun history24HourEstimates(tracker: TrackerData): Map<String, BigDecima
 
 /** Reuses observed interval rates only on covered dates inside the displayed period. */
 internal fun dailyConsumptionRates(tracker: TrackerData, period: CalendarPeriod): Map<LocalDate, BigDecimal> =
+    dailyConsumptionRates(readingIntervals(tracker), period)
+
+internal fun dailyConsumptionRates(
+    intervals: List<ReadingInterval>,
+    period: CalendarPeriod,
+): Map<LocalDate, BigDecimal> =
     buildMap {
         val range = period.range
-        for (interval in readingIntervals(tracker)) {
+        for (interval in intervals) {
             val start = maxOf(range.start, interval.firstCoveredDate)
             val end = minOf(range.endInclusive, interval.lastCoveredDate)
             if (end < start) continue
@@ -217,15 +223,13 @@ data class Dashboard(
  * No overlapping interval means a null total and an empty list of rows.
  */
 fun dashboard(readings: List<Reading>, period: CalendarPeriod): Dashboard =
-    dashboardFromContributions(
-        readingIntervals(readings).map(ReadingInterval::asContribution),
-        period,
-    )
+    dashboardFromIntervals(readingIntervals(readings), period)
 
-fun dashboard(tracker: TrackerData, period: CalendarPeriod): Dashboard {
-    val intervals = readingIntervals(tracker)
-    return dashboardFromContributions(intervals.map(ReadingInterval::asContribution), period)
-}
+fun dashboard(tracker: TrackerData, period: CalendarPeriod): Dashboard =
+    dashboardFromIntervals(readingIntervals(tracker), period)
+
+internal fun dashboardFromIntervals(intervals: List<ReadingInterval>, period: CalendarPeriod): Dashboard =
+    dashboardFromContributions(intervals.map(ReadingInterval::asContribution), period)
 
 private fun dashboardFromContributions(
     contributions: List<ConsumptionContribution>,

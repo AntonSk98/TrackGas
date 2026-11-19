@@ -91,6 +91,7 @@ data class TrackerState(
     val temperatures: Map<LocalDate, BigDecimal> = emptyMap(),
     val intervalTemperatures: Map<LocalDate, BigDecimal> = emptyMap(),
     val dailyTemperatures: Map<LocalDate, BigDecimal> = emptyMap(),
+    val dailyRates: Map<LocalDate, BigDecimal> = emptyMap(),
     val sessionId: String = UUID.randomUUID().toString(),
     val tracker: TrackerData = TrackerData(readings),
     val export: ExportState = ExportState.Idle,
@@ -111,6 +112,7 @@ data class TrackerState(
 class TrackerViewModel(
     private val repository: ReadingRepository,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val projectionDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val temperature: TemperatureServices? = null,
     private val reminderStore: ReminderStore? = null,
     private val reminderScheduler: ReminderScheduler? = null,
@@ -124,6 +126,8 @@ class TrackerViewModel(
     private var observation: Job? = null
     private var suggestionJob: Job? = null
     private var observationGeneration = 0L
+    private var projectionGeneration = 0L
+    private var temperatureGeneration = 0L
     private var acceptedRevision = Long.MIN_VALUE
     private var intervalMeans: List<IntervalTemperatureEntity> = emptyList()
     private var dailyMeans: List<DailyTemperatureEntity> = emptyList()
@@ -136,6 +140,7 @@ class TrackerViewModel(
         temperature?.let { services ->
             viewModelScope.launch {
                 services.coordinator.location.collect {
+                    temperatureGeneration++
                     state = state.copy(meterLocation = it.location)
                     project(state.tracker, state.period)
                     refreshTemperatureSnapshot(services)
@@ -322,7 +327,8 @@ class TrackerViewModel(
             try {
                 repository.observeReadings().collect { snapshot ->
                     if (generation != observationGeneration) return@collect
-                    acceptCommittedSnapshot(snapshot)
+                    if (!acceptCommittedSnapshot(snapshot)) return@collect
+                    if (generation != observationGeneration) return@collect
                     state = state.copy(loadState = ReadingLoadState.READY, loadFailure = null)
                 }
             } catch (error: ReadingStorageException) {
@@ -362,6 +368,7 @@ class TrackerViewModel(
             intervalMeans = snapshot.intervalMeans
             dailyMeans = snapshot.dailyMeans
             intervalMeansGeneration = snapshot.location.generation
+            temperatureGeneration++
             project(state.tracker, state.period)
         } catch (error: CancellationException) {
             throw error
@@ -631,16 +638,36 @@ class TrackerViewModel(
         }
     }
 
-    private fun acceptCommittedSnapshot(snapshot: CommittedSnapshot) {
-        if (snapshot.revision <= acceptedRevision) return
-        acceptedRevision = snapshot.revision
+    private suspend fun acceptCommittedSnapshot(snapshot: CommittedSnapshot): Boolean {
+        if (snapshot.revision < acceptedRevision) return false
         // All three collections matter; reading equality includes exact decimal scale.
-        if (snapshot.tracker.readings.size == state.tracker.readings.size &&
+        val sameTracker = snapshot.tracker.readings.size == state.tracker.readings.size &&
             snapshot.tracker.installations.size == state.tracker.installations.size &&
             snapshot.readings.associateBy { it.id } == state.tracker.readings.associateBy { it.id } &&
             snapshot.tracker.installations.associateBy { it.id } == state.tracker.installations.associateBy { it.id }
-        ) return
-        project(snapshot.tracker, state.period)
+        if (snapshot.revision == acceptedRevision) return sameTracker
+        acceptedRevision = snapshot.revision
+        if (sameTracker) return true
+        if (state.loadState != ReadingLoadState.LOADING) {
+            project(snapshot.tracker, state.period)
+            return true
+        }
+
+        val revision = snapshot.revision
+        val observation = observationGeneration
+        val generation = ++projectionGeneration
+        while (true) {
+            val input = projectionInput(snapshot.tracker, state.period)
+            val projection = withContext(projectionDispatcher) { prepareProjection(input) }
+            if (generation != projectionGeneration || revision != acceptedRevision ||
+                observation != observationGeneration
+            ) return false
+            if (input.temperatureGeneration != temperatureGeneration ||
+                input.period != state.period || input.chartMode != state.chartMode
+            ) continue
+            publishProjection(input, projection)
+            return true
+        }
     }
 
     /**
@@ -648,26 +675,84 @@ class TrackerViewModel(
      * Location revision checks hide old weather immediately, even before cache clearing finishes.
      */
     private fun project(tracker: TrackerData, period: CalendarPeriod) {
-        val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
-            .mapIndexed { index, installation -> installation.id to index }.toMap()
-        val readings = tracker.readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { installations.getValue(it.installationId) })
+        if (state.loadState != ReadingLoadState.LOADING) projectionGeneration++
+        val input = projectionInput(tracker, period)
+        publishProjection(input, prepareProjection(input))
+    }
+
+    private data class ProjectionInput(
+        val tracker: TrackerData,
+        val period: CalendarPeriod,
+        val chartMode: ConsumptionChartMode,
+        val intervalMeans: List<IntervalTemperatureEntity>,
+        val dailyMeans: List<DailyTemperatureEntity>,
+        val location: MeterLocation?,
+        val temperatureGeneration: Long,
+    )
+
+    private data class PreparedProjection(
+        val readings: List<Reading>,
+        val dashboard: Dashboard,
+        val dailyRates: Map<LocalDate, BigDecimal>,
+        val temperatures: Map<LocalDate, BigDecimal>,
+        val intervalTemperatures: Map<LocalDate, BigDecimal>,
+        val dailyTemperatures: Map<LocalDate, BigDecimal>,
+    )
+
+    private fun projectionInput(tracker: TrackerData, period: CalendarPeriod): ProjectionInput {
         val weatherLocation = temperature?.coordinator?.location?.value
         val location = weatherLocation
             ?.takeIf { it.cacheReady && it.generation == intervalMeansGeneration }
             ?.location
+        return ProjectionInput(
+            tracker = tracker,
+            period = period,
+            chartMode = state.chartMode,
+            intervalMeans = intervalMeans,
+            dailyMeans = dailyMeans,
+            location = location,
+            temperatureGeneration = temperatureGeneration,
+        )
+    }
+
+    private fun prepareProjection(input: ProjectionInput): PreparedProjection {
+        val tracker = input.tracker
+        val period = input.period
+        val intervals = readingIntervals(tracker)
+        val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
+            .mapIndexed { index, installation -> installation.id to index }.toMap()
+        val readings = tracker.readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { installations.getValue(it.installationId) })
         val intervalTemperatures = TemperatureAggregation.temperaturesByConsumptionDate(
-            readings, intervalMeans, location,
+            readings, input.intervalMeans, input.location,
         )
         val dailyTemperatures = TemperatureAggregation.dailyTemperaturesByConsumptionDate(
-            readings, dailyMeans, location,
+            readings, input.dailyMeans, input.location,
         )
-        val selectedTemperatures = when (state.chartMode) {
+        val selectedTemperatures = when (input.chartMode) {
             ConsumptionChartMode.ABSOLUTE -> intervalTemperatures
             ConsumptionChartMode.DAILY_ESTIMATE -> dailyTemperatures
         }
-        state = state.copy(readings = readings, tracker = tracker, period = period,
-            dashboard = dashboard(tracker, period), temperatures = selectedTemperatures,
-            intervalTemperatures = intervalTemperatures, dailyTemperatures = dailyTemperatures)
+        return PreparedProjection(
+            readings = readings,
+            dashboard = dashboardFromIntervals(intervals, period),
+            dailyRates = dailyConsumptionRates(intervals, period),
+            temperatures = selectedTemperatures,
+            intervalTemperatures = intervalTemperatures,
+            dailyTemperatures = dailyTemperatures,
+        )
+    }
+
+    private fun publishProjection(input: ProjectionInput, projection: PreparedProjection) {
+        state = state.copy(
+            readings = projection.readings,
+            tracker = input.tracker,
+            period = input.period,
+            dashboard = projection.dashboard,
+            dailyRates = projection.dailyRates,
+            temperatures = projection.temperatures,
+            intervalTemperatures = projection.intervalTemperatures,
+            dailyTemperatures = projection.dailyTemperatures,
+        )
     }
 
     companion object {
@@ -679,11 +764,13 @@ class TrackerViewModel(
             temperature: TemperatureServices? = null,
             reminderStore: ReminderStore? = null,
             reminderScheduler: ReminderScheduler? = null,
+            projectionDispatcher: CoroutineDispatcher = Dispatchers.Default,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 require(modelClass == TrackerViewModel::class.java)
                 return modelClass.cast(TrackerViewModel(
                     repository = repository,
+                    projectionDispatcher = projectionDispatcher,
                     temperature = temperature,
                     reminderStore = reminderStore,
                     reminderScheduler = reminderScheduler,

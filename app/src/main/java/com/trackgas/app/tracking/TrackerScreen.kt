@@ -79,9 +79,6 @@ fun TrackerScreen(
 ) {
     val locale = LocalConfiguration.current.locales[0]
     val ready = state.loadState == ReadingLoadState.READY
-    val dailyRates = remember(state.tracker, state.period) {
-        dailyConsumptionRates(state.tracker, state.period)
-    }
     val mutationsEnabled = ready && !state.dialog.pending && state.csvImport is CsvImportState.Idle
     var optionsExpanded by remember { mutableStateOf(false) }
     var languageDialogOpen by remember { mutableStateOf(false) }
@@ -235,7 +232,7 @@ fun TrackerScreen(
             } else if (tab == TrackerTab.DASHBOARD) {
                 dashboardItems(
                     state.period, state.dashboard, state.temperatures, locale,
-                    state.chartMode, dailyRates, onSelectChartMode, onSelectPeriod, onNavigate,
+                    state.chartMode, state.dailyRates, onSelectChartMode, onSelectPeriod, onNavigate,
                 )
             } else {
                 historyItems(state.readings, locale, onEdit = onOpenEdit, onDelete = onOpenDelete, tracker = state.tracker)

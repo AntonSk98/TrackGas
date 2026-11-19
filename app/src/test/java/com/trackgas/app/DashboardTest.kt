@@ -104,6 +104,53 @@ class DashboardTest {
         )
     }
 
+    private fun yearOfReadings(): TrackerData {
+        val start = LocalDate.parse("2025-01-01")
+        val replacementDate = start.plusDays(180)
+        val originalReadings = (0..180).filterNot { it == 50 }.map { day ->
+            Reading("old-$day", start.plusDays(day.toLong()), BigDecimal.valueOf(100L + day))
+        }
+        val replacementReadings = listOf(Reading("new-start", replacementDate, BigDecimal("9000"), "new")) +
+            (181..364).filterNot { it == 260 }.map { day ->
+                Reading("new-$day", start.plusDays(day.toLong()), BigDecimal.valueOf(9000L + day - 180), "new")
+            }
+        return TrackerData(
+            originalReadings + replacementReadings,
+            listOf(
+                MeterInstallation(ORIGINAL_INSTALLATION_ID),
+                MeterInstallation("new", replacementDate),
+            ),
+        )
+    }
+
+    @Test fun yearOfReadingsProjectsExactWeekMonthAndYearTotals() {
+        val tracker = yearOfReadings()
+        val intervals = readingIntervals(tracker)
+        val week = dashboard(tracker, period(PeriodType.WEEK, "2025-01-06"))
+        val month = dashboard(tracker, period(PeriodType.MONTH, "2025-01-01"))
+        val year = dashboard(tracker, period(PeriodType.YEAR, "2025-01-01"))
+
+        for (selected in listOf(
+            period(PeriodType.WEEK, "2025-01-06"),
+            period(PeriodType.MONTH, "2025-01-01"),
+            period(PeriodType.YEAR, "2025-01-01"),
+        )) {
+            assertEquals(dashboard(tracker, selected), dashboardFromIntervals(intervals, selected))
+            assertEquals(dailyConsumptionRates(tracker, selected), dailyConsumptionRates(intervals, selected))
+        }
+        assertEquals(BigDecimal("7"), week.total.cubicMetres)
+        assertEquals(7L, week.total.coveredDays)
+        assertEquals(BigDecimal("30"), month.total.cubicMetres)
+        assertEquals(30L, month.total.coveredDays)
+        assertEquals(BigDecimal("364"), year.total.cubicMetres)
+        assertEquals(364L, year.total.coveredDays)
+        assertEquals(12, year.buckets.size)
+        assertEquals(BigDecimal("364"), year.buckets.fold(BigDecimal.ZERO) { total, bucket ->
+            total.add(requireNotNull(bucket.amount.cubicMetres))
+        })
+        assertTrue(year.total.estimatedDistribution)
+    }
+
     @Test fun replacementAcrossWeekMonthAndYearBoundariesKeepsBothSidesIndependent() {
         for ((type, boundaryText) in listOf(
             PeriodType.WEEK to "2026-11-01",

@@ -28,6 +28,7 @@ import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -47,12 +48,49 @@ class TrackerViewModelTest {
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
     @After fun tearDown() = Dispatchers.resetMain()
 
+    @Test fun initialProjectionRunsOffMainAndIgnoresStaleSnapshots() = runTest {
+        val repo = ScriptedReadingRepository()
+        val projectionScheduler = TestCoroutineScheduler()
+        val vm = TrackerViewModel(
+            repo,
+            ioDispatcher = dispatcher,
+            projectionDispatcher = StandardTestDispatcher(projectionScheduler),
+        ) { today }
+
+        repo.deliver(listOf(one, two), 1)
+        runCurrent()
+        assertEquals(ReadingLoadState.LOADING, vm.state.loadState)
+        vm.selectTab(TrackerTab.HISTORY)
+        vm.selectPeriod(PeriodType.YEAR)
+        assertEquals(TrackerTab.HISTORY, vm.state.tab)
+        assertEquals(PeriodType.YEAR, vm.state.period.type)
+
+        repeat(2) {
+            projectionScheduler.runCurrent()
+            runCurrent()
+        }
+        assertEquals(ReadingLoadState.READY, vm.state.loadState)
+        assertEquals(TrackerTab.HISTORY, vm.state.tab)
+        assertEquals(dashboard(listOf(one, two), vm.state.period), vm.state.dashboard)
+        assertEquals(dailyConsumptionRates(vm.state.tracker, vm.state.period), vm.state.dailyRates)
+
+        val latest = listOf(one, two.copy(cubicMetres = "120".toBigDecimal()))
+        repo.deliver(latest, 2)
+        runCurrent()
+        val currentProjection = vm.state.dashboard
+        repo.deliver(listOf(one), 1)
+        runCurrent()
+        assertEquals(latest, vm.state.tracker.readings)
+        assertSame(currentProjection, vm.state.dashboard)
+    }
+
     @Test fun chartModeChangesOnlyPresentationAndSurvivesNavigationAndRefresh() = runTest {
         val repo = ScriptedReadingRepository()
         val vm = TrackerViewModel(repo, ioDispatcher = dispatcher) { today }
         repo.deliver(listOf(one, two)); runCurrent()
         assertEquals(ConsumptionChartMode.ABSOLUTE, vm.state.chartMode)
         val before = vm.state
+        assertEquals(dailyConsumptionRates(vm.state.tracker, vm.state.period), vm.state.dailyRates)
         vm.selectChartMode(ConsumptionChartMode.DAILY_ESTIMATE)
         assertEquals(before.copy(chartMode = ConsumptionChartMode.DAILY_ESTIMATE), vm.state)
         assertTrue(repo.saves.isEmpty())
@@ -91,7 +129,7 @@ class TrackerViewModelTest {
         repo.deliver(listOf(earlier, later)); runCurrent()
         vm.selectPeriod(PeriodType.MONTH)
         val absolute = vm.state.dashboard
-        fun rates() = dailyConsumptionRates(vm.state.tracker, vm.state.period)
+        fun rates() = vm.state.dailyRates
         assertEquals(0, "8".toBigDecimal().compareTo(rates().getValue(today)))
 
         vm.openEdit(later)
@@ -138,7 +176,7 @@ class TrackerViewModelTest {
     @Test fun exportRetainsFrozenCommittedSnapshotAndRejectsStaleRequests() = runTest {
         val repo = ScriptedReadingRepository()
         val store = ViewModelStore()
-        val factory = TrackerViewModel.factory(repo)
+        val factory = TrackerViewModel.factory(repo, projectionDispatcher = dispatcher)
         try {
             val vm = ViewModelProvider(store, factory)[TrackerViewModel::class.java]
             assertNull(vm.requestExport())
@@ -174,7 +212,7 @@ class TrackerViewModelTest {
     @Test fun failedExportRetainsFeedbackUntilAcknowledgedAfterOwnerRecreation() = runTest {
         val repo = ScriptedReadingRepository()
         val store = ViewModelStore()
-        val factory = TrackerViewModel.factory(repo)
+        val factory = TrackerViewModel.factory(repo, projectionDispatcher = dispatcher)
         try {
             val vm = ViewModelProvider(store, factory)[TrackerViewModel::class.java]
             repo.deliver(listOf(one, two)); runCurrent()
@@ -792,7 +830,7 @@ class TrackerViewModelTest {
     @Test fun navigationAndFreshSessionDefaultsDoNotChangeCommittedReadings() = runTest {
         val repo = ScriptedReadingRepository()
         val store = ViewModelStore()
-        val factory = TrackerViewModel.factory(repo)
+        val factory = TrackerViewModel.factory(repo, projectionDispatcher = dispatcher)
         try {
             val old = ViewModelProvider(store, factory)[TrackerViewModel::class.java]
             repo.deliver(listOf(two, one)); runCurrent()
@@ -1038,7 +1076,10 @@ class TrackerViewModelTest {
     @Test fun clearingStoreCancelsPendingRequestsWithoutSynthesizingAFailedPhase() = runTest {
         val repo = ScriptedReadingRepository()
         val store = ViewModelStore()
-        val vm = ViewModelProvider(store, TrackerViewModel.factory(repo))[TrackerViewModel::class.java]
+        val vm = ViewModelProvider(
+            store,
+            TrackerViewModel.factory(repo, projectionDispatcher = dispatcher),
+        )[TrackerViewModel::class.java]
         repo.deliver(listOf(one)); runCurrent()
         vm.openAdd(); vm.save(today, "110", Locale.US); runCurrent()
         val pending = vm.state.dialog
