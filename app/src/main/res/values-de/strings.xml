@@ -81,7 +81,6 @@
     <string name="previous_period">Vorheriger Zeitraum</string>
     <string name="next_period">Nächster Zeitraum</string>
     <string name="period_range">%1$s – %2$s</string>
-    <string name="loading_readings">Zählerstände werden geladen…</string>
     <string name="load_storage_error">Die Zählerstände konnten nicht von diesem Gerät geladen werden. Versuch es bitte erneut.</string>
     <string name="save_storage_error">Der Zählerstand konnte nicht auf diesem Gerät gespeichert werden. Dein Entwurf ist unverändert. Versuch es bitte erneut.</string>
     <string name="delete_storage_error">Der Zählerstand konnte nicht von diesem Gerät gelöscht werden. Versuch es bitte erneut.</string>

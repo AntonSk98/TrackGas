@@ -81,7 +81,6 @@
     <string name="previous_period">Previous period</string>
     <string name="next_period">Next period</string>
     <string name="period_range">%1$s – %2$s</string>
-    <string name="loading_readings">Loading readings…</string>
     <string name="load_storage_error">Could not load readings from this device. Try again.</string>
     <string name="save_storage_error">Could not save this reading on this device. Your draft is unchanged; try again.</string>
     <string name="delete_storage_error">Could not delete this reading from this device. Try again.</string>

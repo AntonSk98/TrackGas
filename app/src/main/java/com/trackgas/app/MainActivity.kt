@@ -106,6 +106,8 @@ private fun TrackGasApp(tracker: TrackerViewModel, onExport: () -> Unit, onImpor
             onSelectChartMode = tracker::selectChartMode,
             onNavigate = tracker::navigate,
             onRetryLoad = tracker::retryLoad,
+            onLoadMoreHistory = tracker::loadMoreHistory,
+            onRetryHistory = tracker::retryHistory,
             onOpenAdd = tracker::openAdd,
             onOpenEdit = tracker::openEdit,
             onOpenDelete = tracker::openDelete,

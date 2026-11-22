@@ -17,6 +17,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -150,7 +152,6 @@ class MeterLocationViewModelTest {
         runCurrent()
         vm.selectTab(TrackerTab.HISTORY)
         vm.selectPeriod(PeriodType.MONTH)
-        vm.navigate(-1)
         val period = vm.state.period
         val temperature = mapOf(today to "6".toBigDecimal())
 
@@ -214,7 +215,8 @@ class MeterLocationViewModelTest {
         val repo = MemoryReadingRepository(readings)
         val temperatures = FakeTemperatureRepository()
         val vm = TrackerViewModel(repo, ioDispatcher = dispatcher,
-            temperature = services(store = FakeLocationStore(saved), temperatures = temperatures))
+            temperature = services(store = FakeLocationStore(saved), temperatures = temperatures),
+            currentDate = { today })
         runCurrent()
         temperatures.emit(listOf(com.trackgas.app.temperature.TemperatureInterval(readings[0], readings[1]).row(saved, "6")))
         runCurrent()
@@ -284,10 +286,12 @@ class MeterLocationViewModelTest {
         private val state = MutableStateFlow<List<com.trackgas.app.temperature.IntervalTemperatureEntity>>(emptyList())
         private val dailyState = MutableStateFlow<List<com.trackgas.app.temperature.DailyTemperatureEntity>>(emptyList())
         private var committed = state.value
-        override fun observe() = state
-        override suspend fun stored() = committed
-        override fun observeDaily() = dailyState
-        override suspend fun storedDaily() = dailyState.value
+        override fun observeChanges() = merge(state.map { Unit }, dailyState.map { Unit })
+        override suspend fun storedForLaterReadings(readingIds: Set<String>, location: String) =
+            committed.filter { it.laterId in readingIds && it.location == location }
+        override suspend fun storedDaily(range: DateRange, location: String) = dailyState.value.filter {
+            it.location == location && LocalDate.parse(it.date) in range.start..range.endInclusive
+        }
         override suspend fun pruneObsolete() = Unit
         override suspend fun storeIfCurrent(temperature: com.trackgas.app.temperature.IntervalTemperatureEntity): Boolean {
             emit(committed + temperature)

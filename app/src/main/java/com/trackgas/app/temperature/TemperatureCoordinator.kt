@@ -1,5 +1,8 @@
 package com.trackgas.app.temperature
 
+import com.trackgas.app.tracking.DateRange
+import com.trackgas.app.tracking.TrackerData
+import com.trackgas.app.tracking.dashboardDataForPeriod
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,11 +53,21 @@ class TemperatureCoordinator(
         else temperatures.storeDailyIfCurrent(mean)
     }
 
-    suspend fun snapshot(): TemperatureCacheSnapshot = mutex.withLock {
+    suspend fun snapshot(tracker: TrackerData, range: DateRange): TemperatureCacheSnapshot = mutex.withLock {
+        val captured = current.value
+        val fingerprint = captured.location
+            ?.takeIf { !needsClear && captured.cacheReady }
+            ?.fingerprint()
         TemperatureCacheSnapshot(
-            current.value,
-            if (needsClear) emptyList() else temperatures.stored(),
-            if (needsClear) emptyList() else temperatures.storedDaily(),
+            captured,
+            if (fingerprint != null) temperatures.storedForLaterReadings(
+                dashboardDataForPeriod(tracker, range).readings.asSequence()
+                    .filter { it.date >= range.start }
+                    .map { it.id }
+                    .toSet(),
+                fingerprint,
+            ) else emptyList(),
+            if (fingerprint != null) temperatures.storedDaily(range, fingerprint) else emptyList(),
         )
     }
 }

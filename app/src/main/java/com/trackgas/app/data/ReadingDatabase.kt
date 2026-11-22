@@ -24,7 +24,10 @@ data class InstallationEntity(@PrimaryKey val id: String, val startDate: String?
 
 @Entity(
     tableName = "readings",
-    indices = [Index(value = ["installationId", "date"], unique = true)],
+    indices = [
+        Index(value = ["installationId", "date"], unique = true),
+        Index(value = ["date"]),
+    ],
     foreignKeys = [ForeignKey(entity = InstallationEntity::class, parentColumns = ["id"],
         childColumns = ["installationId"], onDelete = ForeignKey.RESTRICT, onUpdate = ForeignKey.RESTRICT)],
 )
@@ -82,17 +85,92 @@ interface ReadingDao {
     @Query("SELECT readings.* FROM readings LEFT JOIN installations ON readings.installationId = installations.id ORDER BY readings.date DESC, installations.startDate DESC, readings.id")
     fun observeAll(): Flow<List<ReadingEntity>>
 
+    @Query("SELECT COUNT(*) FROM readings")
+    fun observeCount(): Flow<Int>
+
     @Query("SELECT readings.* FROM readings LEFT JOIN installations ON readings.installationId = installations.id ORDER BY readings.date DESC, installations.startDate DESC, readings.id")
     suspend fun getAll(): List<ReadingEntity>
 
-    @Query("SELECT MIN(date) AS startDate, MAX(date) AS endDate FROM readings")
-    suspend fun dateRange(): StoredReadingDateRange
-
-    @Query("SELECT COUNT(*) FROM readings")
-    suspend fun count(): Int
-
     @Query("SELECT * FROM installations ORDER BY startDate, id")
     suspend fun getInstallations(): List<InstallationEntity>
+
+    @Query("SELECT * FROM readings WHERE date BETWEEN :startDate AND :endDate")
+    suspend fun getReadingsInRange(startDate: String, endDate: String): List<ReadingEntity>
+
+    @Query("""
+        SELECT readings.* FROM readings
+        JOIN (
+            SELECT installationId, MAX(date) AS boundaryDate
+            FROM readings WHERE date < :startDate GROUP BY installationId
+        ) boundary ON readings.installationId = boundary.installationId AND readings.date = boundary.boundaryDate
+    """)
+    suspend fun getReadingsBefore(startDate: String): List<ReadingEntity>
+
+    @Query("""
+        SELECT readings.* FROM readings
+        JOIN (
+            SELECT installationId, MIN(date) AS boundaryDate
+            FROM readings WHERE date > :endDate GROUP BY installationId
+        ) boundary ON readings.installationId = boundary.installationId AND readings.date = boundary.boundaryDate
+    """)
+    suspend fun getReadingsAfter(endDate: String): List<ReadingEntity>
+
+    @Query("""
+        SELECT readings.* FROM readings
+        LEFT JOIN installations ON readings.installationId = installations.id
+        WHERE :cursorDate IS NULL OR readings.date < :cursorDate OR (
+            readings.date = :cursorDate AND (
+                CASE WHEN installations.startDate IS NULL THEN 1 ELSE 0 END > :cursorStartDatePresent
+                OR (
+                    CASE WHEN installations.startDate IS NULL THEN 1 ELSE 0 END = :cursorStartDatePresent
+                    AND (
+                        (
+                            :cursorStartDatePresent = 0 AND (
+                                installations.startDate IS NULL
+                                OR installations.startDate < :cursorStartDate
+                                OR (
+                                    installations.startDate = :cursorStartDate
+                                    AND installations.id < :cursorInstallationId
+                                )
+                            )
+                        )
+                        OR (:cursorStartDatePresent = 1 AND installations.id < :cursorInstallationId)
+                        OR (installations.id = :cursorInstallationId AND readings.id > :cursorReadingId)
+                    )
+                )
+            )
+        )
+        ORDER BY readings.date DESC,
+            CASE WHEN installations.startDate IS NULL THEN 1 ELSE 0 END ASC,
+            installations.startDate DESC, installations.id DESC, readings.id ASC
+        LIMIT :limit
+    """)
+    suspend fun getHistoryPage(
+        cursorDate: String?,
+        cursorStartDatePresent: Int,
+        cursorStartDate: String?,
+        cursorInstallationId: String?,
+        cursorReadingId: String?,
+        limit: Int,
+    ): List<ReadingEntity>
+
+    @Query("""
+        SELECT readings.* FROM readings
+        JOIN (
+            SELECT installationId, MAX(date) AS boundaryDate
+            FROM readings WHERE date < :date GROUP BY installationId
+        ) boundary ON readings.installationId = boundary.installationId AND readings.date = boundary.boundaryDate
+    """)
+    suspend fun getHistoryPredecessors(date: String): List<ReadingEntity>
+
+    @Query("""
+        SELECT readings.id FROM readings
+        JOIN installations ON readings.installationId = installations.id
+        WHERE readings.installationId IN (:installationIds)
+            AND installations.startDate IS NOT NULL
+            AND readings.date = installations.startDate
+    """)
+    suspend fun getHistoryStartingIds(installationIds: List<String>): List<String>
 
     @Insert
     suspend fun insertInstallation(installation: InstallationEntity)
@@ -119,11 +197,9 @@ interface ReadingDao {
     suspend fun deleteInstallations()
 }
 
-data class StoredReadingDateRange(val startDate: String?, val endDate: String?)
-
 @Database(
     entities = [ReadingEntity::class, InstallationEntity::class, IntervalTemperatureEntity::class, DailyTemperatureEntity::class],
-    version = 7,
+    version = 9,
     exportSchema = true,
 )
 abstract class ReadingDatabase : RoomDatabase() {

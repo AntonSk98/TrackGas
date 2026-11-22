@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -42,6 +43,7 @@ import com.trackgas.app.R
 import com.trackgas.app.temperature.MeterLocation
 import java.time.LocalDate
 import java.util.Locale
+import kotlinx.coroutines.flow.collect
 
 /** State/callback route. Semantic dialogs come exclusively from the session state. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,6 +56,8 @@ fun TrackerScreen(
     onSelectChartMode: (ConsumptionChartMode) -> Unit,
     onNavigate: (Long) -> Unit,
     onRetryLoad: () -> Unit,
+    onLoadMoreHistory: () -> Unit = {},
+    onRetryHistory: () -> Unit = {},
     onOpenAdd: () -> Unit,
     onOpenEdit: (Reading) -> Unit,
     onOpenDelete: (Reading) -> Unit,
@@ -221,21 +225,57 @@ fun TrackerScreen(
             )
         },
     ) { tab, scroll ->
+        LaunchedEffect(
+            tab, state.tab, scroll, state.history.readings.size, state.history.hasMore,
+            state.history.loading, state.history.error,
+        ) {
+            if (tab != TrackerTab.HISTORY || state.tab != TrackerTab.HISTORY ||
+                state.history.loading || state.history.error || !state.history.hasMore
+            ) return@LaunchedEffect
+            snapshotFlow { scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+                .collect { lastVisible ->
+                    if (lastVisible >= state.history.readings.size - 2) onLoadMoreHistory()
+                }
+        }
         LazyColumn(
             modifier = Modifier.widthIn(max = 840.dp).fillMaxSize(),
             state = scroll,
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (!ready) {
-                item(key = "load-state") { ReadingLoadContent(state.loadState, onRetryLoad) }
-            } else if (tab == TrackerTab.DASHBOARD) {
-                dashboardItems(
-                    state.period, state.dashboard, state.temperatures, locale,
-                    state.chartMode, state.dailyRates, onSelectChartMode, onSelectPeriod, onNavigate,
-                )
+            if (tab == TrackerTab.DASHBOARD) {
+                if (state.dashboardLoadState != ReadingLoadState.READY) {
+                    item(key = "dashboard-load-state") {
+                        ReadingLoadContent(
+                            state.dashboardLoadState,
+                            onRetryLoad,
+                            modifier = Modifier.fillParentMaxSize(),
+                        )
+                    }
+                } else {
+                    dashboardItems(
+                        state.period, state.dashboard, state.temperatures, locale,
+                        state.chartMode, state.dailyRates, onSelectChartMode, onSelectPeriod, onNavigate,
+                    )
+                }
             } else {
-                historyItems(state.readings, locale, onEdit = onOpenEdit, onDelete = onOpenDelete, tracker = state.tracker)
+                historyItems(
+                    state.history.readings,
+                    locale,
+                    onEdit = onOpenEdit,
+                    onDelete = onOpenDelete,
+                    tracker = state.history.context,
+                    startingReadingIds = state.history.startingReadingIds,
+                    loaded = state.history.loaded,
+                    loading = state.history.loading,
+                    failed = state.history.error,
+                    onRetry = onRetryHistory,
+                )
+            }
+            if (state.dialog == ReadingDialog.Closed && state.dialogLoadState != ReadingLoadState.READY) {
+                item(key = "dialog-load-state") {
+                    ReadingLoadContent(state.dialogLoadState, onRetryLoad, inline = true)
+                }
             }
         }
     }
@@ -269,15 +309,15 @@ fun TrackerScreen(
             ReadingForm(
                 sessionId = state.sessionId,
                 dialog = dialog,
-                readings = state.readings,
+                readings = state.dialogTracker?.readings ?: state.readings,
                 today = currentDate(),
                 locale = locale,
-                loadState = state.loadState,
+                loadState = if (state.dialogLoadState == ReadingLoadState.READY) state.loadState else state.dialogLoadState,
                 onRetryLoad = onRetryLoad,
                 onClearError = onClearDialogError,
                 onSave = { date, value, note, time, zone -> onSave(date, value, locale, note, time, zone) },
                 onDismiss = onDismissDialog,
-                tracker = state.tracker,
+                tracker = state.dialogTracker ?: state.tracker,
             )
         }
         is ReadingDialog.ConfirmingDeletion -> DeleteReadingDialog(
@@ -287,7 +327,7 @@ fun TrackerScreen(
             ReplacementForm(
                 dialog = dialog,
                 locale = locale,
-                loadState = state.loadState,
+                loadState = if (state.dialogLoadState == ReadingLoadState.READY) state.loadState else state.dialogLoadState,
                 onRetryLoad = onRetryLoad,
                 onClearError = onClearDialogError,
                 onConfirm = { value -> onReplaceMeter(value, locale) },

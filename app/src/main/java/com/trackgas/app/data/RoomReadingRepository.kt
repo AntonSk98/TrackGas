@@ -3,7 +3,6 @@ package com.trackgas.app.data
 import androidx.room.withTransaction
 import com.trackgas.app.tracking.*
 import java.util.UUID
-import java.time.LocalDate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -25,24 +24,67 @@ class RoomReadingRepository internal constructor(
     private var mutationRevision = 0L
     private val consumedImportPreviews = mutableSetOf<String>()
 
+    override val usesPeriodScopedDashboardData: Boolean = true
+
     override fun observeReadings(): Flow<CommittedSnapshot> =
         dao.observeAll().map {
             // Room payloads are only invalidation triggers: buffered rows may predate a commit.
             ordering.withLock { snapshot(database.withTransaction { readRows() }) }
         }.catch { failure -> throw classifyReadingFailure(failure) }
 
-    override suspend fun readingDateRange(): DateRange? = readingStorageOperation {
-        val dates = dao.dateRange()
-        val start = dates.startDate ?: return@readingStorageOperation null
-        val end = dates.endDate ?: return@readingStorageOperation null
-        try {
-            DateRange(LocalDate.parse(start), LocalDate.parse(end))
-        } catch (error: java.time.format.DateTimeParseException) {
-            throw StoredReadingDecodingException(error)
+    override fun observeDashboardData(range: DateRange): Flow<DashboardSnapshot> =
+        dao.observeCount().map { DashboardSnapshot(loadDashboardData(range)) }
+            .catch { failure -> throw classifyReadingFailure(failure) }
+
+    private suspend fun loadDashboardData(range: DateRange): TrackerData = readingStorageOperation {
+        database.withTransaction {
+            val readings = (
+                dao.getReadingsInRange(range.start.toString(), range.endInclusive.toString()) +
+                    dao.getReadingsBefore(range.start.toString()) +
+                    dao.getReadingsAfter(range.endInclusive.toString())
+                ).distinctBy { it.id }.map { it.toReading() }
+            validatedTracker(readings, dao.getInstallations().map { it.toInstallation() })
         }
     }
 
-    override suspend fun readingCount(): Int = readingStorageOperation { dao.count() }
+    override suspend fun historyPage(cursor: HistoryCursor?, pageSize: Int): HistoryPage = readingStorageOperation {
+        require(pageSize > 0)
+        database.withTransaction {
+            val rows = dao.getHistoryPage(
+                cursorDate = cursor?.date?.toString(),
+                cursorStartDatePresent = if (cursor?.installationStartDate != null) 0 else 1,
+                cursorStartDate = cursor?.installationStartDate?.toString(),
+                cursorInstallationId = cursor?.installationId,
+                cursorReadingId = cursor?.readingId,
+                limit = pageSize + 1,
+            )
+            val hasMore = rows.size > pageSize
+            val pageRows = rows.take(pageSize).map { it.toReading() }
+            val installations = dao.getInstallations().map { it.toInstallation() }
+            val installationIds = pageRows.map { it.installationId }.toSet()
+            val predecessors = pageRows.minOfOrNull { it.date }?.let { oldestDate ->
+                dao.getHistoryPredecessors(oldestDate.toString())
+                    .asSequence()
+                    .filter { it.installationId in installationIds }
+                    .map { it.toReading() }
+                    .toList()
+            }.orEmpty()
+            val startingIds = if (installationIds.isEmpty()) emptySet() else
+                dao.getHistoryStartingIds(installationIds.toList()).toSet()
+            val last = pageRows.lastOrNull()
+            HistoryPage(
+                readings = pageRows,
+                predecessorReadings = predecessors,
+                installations = installations,
+                startingReadingIds = startingIds,
+                nextCursor = if (hasMore && last != null) historyCursor(last, installations) else null,
+            )
+        }
+    }
+
+    override suspend fun completeTracker(): TrackerData = readingStorageOperation {
+        database.withTransaction { readRows() }
+    }
 
     override suspend fun save(intent: SaveReadingIntent): SaveReadingResult = readingStorageOperation {
         ordering.withLock {
@@ -223,8 +265,12 @@ class RoomReadingRepository internal constructor(
     }
 
     private suspend fun readRows(): TrackerData {
-        val tracker = TrackerData(dao.getAll().map { it.toReading() },
+        return validatedTracker(dao.getAll().map { it.toReading() },
             dao.getInstallations().map { it.toInstallation() })
+    }
+
+    private fun validatedTracker(readings: List<Reading>, installations: List<MeterInstallation>): TrackerData {
+        val tracker = TrackerData(readings, installations)
         readingCollectionViolation(tracker)?.let {
             throw StoredReadingDecodingException(IllegalArgumentException("Invalid stored reading collection: $it"))
         }

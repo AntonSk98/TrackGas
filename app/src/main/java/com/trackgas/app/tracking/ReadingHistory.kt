@@ -46,12 +46,32 @@ internal fun LazyListScope.historyItems(
     onEdit: (Reading) -> Unit,
     onDelete: (Reading) -> Unit,
     tracker: TrackerData = TrackerData(readings),
+    startingReadingIds: Set<String> = meterStartingReadingIds(tracker),
+    loaded: Boolean = true,
+    loading: Boolean = false,
+    failed: Boolean = false,
+    onRetry: () -> Unit = {},
 ) {
-    val estimates = history24HourEstimates(tracker)
-    val startingReadingIds = meterStartingReadingIds(tracker)
+    val readingInstallationIds = tracker.readings.map { it.installationId }.toSet()
+    val estimateTracker = TrackerData(
+        tracker.readings,
+        tracker.installations.filter { it.id in readingInstallationIds },
+    )
+    if (!loaded) {
+        item(key = "history-initial-load-state") {
+            ReadingLoadContent(
+                if (failed) ReadingLoadState.ERROR else ReadingLoadState.LOADING,
+                onRetry,
+                modifier = Modifier.fillParentMaxSize(),
+            )
+        }
+        return
+    }
+
+    val estimates = history24HourEstimates(estimateTracker)
     val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
     val meterNumbers = installations.mapIndexed { index, installation -> installation.id to index + 1 }.toMap()
-    val ordered = readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { meterNumbers[it.installationId] })
+    val ordered = readings.sortedWith(historyOrder(tracker.installations))
     item(key = "history-heading") {
         Text(
             stringResource(R.string.reading_history),
@@ -59,7 +79,7 @@ internal fun LazyListScope.historyItems(
             modifier = Modifier.semantics { heading() },
         )
     }
-    if (readings.isEmpty()) {
+    if (loaded && readings.isEmpty()) {
         item(key = "empty-history") {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -134,5 +154,13 @@ internal fun LazyListScope.historyItems(
             }
         }
         HorizontalDivider()
+    }
+    if (loading || failed) {
+        item(key = "history-pagination-state") {
+            ReadingLoadContent(
+                if (failed) ReadingLoadState.ERROR else ReadingLoadState.LOADING,
+                onRetry,
+            )
+        }
     }
 }

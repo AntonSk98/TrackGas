@@ -1,6 +1,12 @@
 package com.trackgas.app.temperature
 
 import com.trackgas.app.tracking.ReadingRepository
+import com.trackgas.app.tracking.CalendarPeriod
+import com.trackgas.app.tracking.DateRange
+import com.trackgas.app.tracking.PeriodType
+import com.trackgas.app.tracking.dashboardDataForPeriod
+import java.time.LocalDate
+import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -15,6 +21,7 @@ import kotlinx.coroutines.flow.first
 /** Requests best-effort backfills and invalidates cached temperatures when the location changes. */
 interface TemperatureCheckRequester {
     fun requestCheck()
+    fun requestCheck(range: DateRange) = requestCheck()
 }
 
 /** Conflates app and connectivity events into best-effort, batched temperature backfills. */
@@ -28,30 +35,44 @@ class TemperatureSync(
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val coordinator: TemperatureCoordinator = TemperatureCoordinator(locationStore, temperatureStore),
 ) : TemperatureCheckRequester {
-    private val checks = MutableSharedFlow<Unit>(
+    private val selectedRange = AtomicReference(
+        CalendarPeriod.containing(PeriodType.WEEK, LocalDate.now()).range,
+    )
+    private val checks = MutableSharedFlow<DateRange>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
-    private val networkRegistration = networkMonitor.addOnAvailableListener(::requestCheck)
+    private val networkRegistration = networkMonitor.addOnAvailableListener { requestCheck() }
     private val worker = scope.launch(dispatcher, start = CoroutineStart.UNDISPATCHED) {
-        checks.collect { checkNow() }
+        checks.collect { checkNow(it) }
     }
 
     override fun requestCheck() {
-        checks.tryEmit(Unit)
+        requestCheck(selectedRange.get())
     }
 
-    private suspend fun checkNow() {
+    override fun requestCheck(range: DateRange) {
+        selectedRange.set(range)
+        checks.tryEmit(range)
+    }
+
+    private suspend fun checkNow(range: DateRange) {
         bestEffort("Temperature check failed") {
-            bestEffort("Temperature cache cleanup failed") {
-                temperatureStore.pruneObsolete()
-            }
             if (!networkMonitor.isOnline()) return@bestEffort
             val captured = coordinator.location.value
             if (!captured.cacheReady) return@bestEffort
             val location = captured.location ?: return@bestEffort
-            val tracker = readings.observeReadings().first().tracker
-            for (interval in missingIntervals(tracker.readings, temperatureStore.stored(), location.fingerprint())) {
+            val tracker = dashboardDataForPeriod(
+                readings.observeDashboardData(range).first().tracker,
+                range,
+            )
+            val relevantReadings = tracker.readings.filter { it.date >= range.start }
+            val locationFingerprint = location.fingerprint()
+            val storedIntervals = temperatureStore.storedForLaterReadings(
+                relevantReadings.map { it.id }.toSet(),
+                locationFingerprint,
+            )
+            for (interval in missingIntervals(tracker.readings, storedIntervals, locationFingerprint)) {
                 // A failed gap stays missing and is retried by a later check.
                 bestEffort("Open-Meteo temperature request failed") {
                     val mean = provider.fetchIntervalTemperatureMean(location, interval)
@@ -63,14 +84,19 @@ class TemperatureSync(
                     }
                 }
             }
-            for (range in missingDailyDateRanges(
+            val dailyRanges = missingDailyDateRanges(
                 tracker.readings,
-                temperatureStore.storedDaily(),
-                location.fingerprint(),
-            )) {
-                var start = range.start
-                while (start <= range.endInclusive) {
-                    val endInclusive = minOf(start.plusDays(MAX_DAILY_DAYS_PER_REQUEST - 1), range.endInclusive)
+                temperatureStore.storedDaily(range, locationFingerprint),
+                locationFingerprint,
+            ).mapNotNull { missing ->
+                val start = maxOf(missing.start, range.start)
+                val end = minOf(missing.endInclusive, range.endInclusive)
+                if (start <= end) DateRange(start, end) else null
+            }
+            for (dailyRange in dailyRanges) {
+                var start = dailyRange.start
+                while (start <= dailyRange.endInclusive) {
+                    val endInclusive = minOf(start.plusDays(MAX_DAILY_DAYS_PER_REQUEST - 1), dailyRange.endInclusive)
                     bestEffort("Open-Meteo daily temperature request failed") {
                         val means = provider.fetchDailyMeans(location, start, endInclusive)
                         require(means.keys.all { it in start..endInclusive }) {

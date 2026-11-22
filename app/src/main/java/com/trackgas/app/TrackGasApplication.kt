@@ -3,6 +3,8 @@ package com.trackgas.app
 import android.app.Application
 import androidx.room.Room
 import com.trackgas.app.data.MIGRATION_6_7
+import com.trackgas.app.data.MIGRATION_7_8
+import com.trackgas.app.data.MIGRATION_8_9
 import com.trackgas.app.data.ReadingDatabase
 import com.trackgas.app.data.RoomReadingRepository
 import com.trackgas.app.reminders.ReminderScheduler
@@ -37,7 +39,7 @@ class TrackGasApplication : Application() {
 
     private val database by lazy {
         Room.databaseBuilder(this, ReadingDatabase::class.java, "readings.db")
-            .addMigrations(MIGRATION_6_7)
+            .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
             .build()
     }
     val readingRepository: ReadingRepository by lazy { RoomReadingRepository(database) }

@@ -313,11 +313,14 @@ class TrackerViewModelTest {
                     override fun addOnAvailableListener(listener: () -> Unit) = AutoCloseable {}
                 },
                 temperatures = object : TemperatureRepository {
-                    override fun observe() = emptyFlow<List<com.trackgas.app.temperature.IntervalTemperatureEntity>>()
-                    override suspend fun stored() = emptyList<com.trackgas.app.temperature.IntervalTemperatureEntity>()
+                    override fun observeChanges() = emptyFlow<Unit>()
+                    override suspend fun storedForLaterReadings(
+                        readingIds: Set<String>,
+                        location: String,
+                    ) = emptyList<com.trackgas.app.temperature.IntervalTemperatureEntity>()
                     override suspend fun storeIfCurrent(temperature: com.trackgas.app.temperature.IntervalTemperatureEntity) = true
-                    override fun observeDaily() = emptyFlow<List<com.trackgas.app.temperature.DailyTemperatureEntity>>()
-                    override suspend fun storedDaily() = emptyList<com.trackgas.app.temperature.DailyTemperatureEntity>()
+                    override suspend fun storedDaily(range: DateRange, location: String) =
+                        emptyList<com.trackgas.app.temperature.DailyTemperatureEntity>()
                     override suspend fun storeDailyIfCurrent(temperature: com.trackgas.app.temperature.DailyTemperatureEntity) = true
                     override suspend fun pruneObsolete() = Unit
                     override suspend fun deleteAll() = Unit
@@ -946,7 +949,7 @@ class TrackerViewModelTest {
         val scaleChanged = two.copy(cubicMetres = "112.12500".toBigDecimal())
         repo.deliver(listOf(scaleChanged, one), 6); runCurrent()
         assertEquals(5, vm.state.readings.first().cubicMetres.scale())
-        assertNotSame(projection, vm.state.dashboard)
+        assertEquals(dashboard(listOf(scaleChanged, one), vm.state.period), vm.state.dashboard)
         val beforePeriodChange = vm.state.dashboard
         vm.selectPeriod(PeriodType.YEAR)
         assertNotSame(beforePeriodChange, vm.state.dashboard)
@@ -994,6 +997,18 @@ class TrackerViewModelTest {
                 override suspend fun collect(collector: FlowCollector<CommittedSnapshot>) {
                     collectors += collector
                     for (event in events) collector.emit(event.getOrThrow())
+                }
+            }
+
+            override fun observeDashboardData(range: DateRange) = object : Flow<DashboardSnapshot> {
+                override suspend fun collect(collector: FlowCollector<DashboardSnapshot>) {
+                    val bridge = object : FlowCollector<CommittedSnapshot> {
+                        override suspend fun emit(value: CommittedSnapshot) {
+                            collector.emit(DashboardSnapshot(value.tracker, value.revision))
+                        }
+                    }
+                    collectors += bridge
+                    for (event in events) bridge.emit(event.getOrThrow())
                 }
             }
         }

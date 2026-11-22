@@ -10,7 +10,6 @@ import com.trackgas.app.temperature.MeterLocation
 import com.trackgas.app.temperature.TemperatureServices
 import com.trackgas.app.temperature.IntervalTemperatureEntity
 import com.trackgas.app.temperature.DailyTemperatureEntity
-import com.trackgas.app.temperature.TemperatureAggregation
 import java.time.Instant
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
@@ -19,7 +18,6 @@ import com.trackgas.app.reminders.ReminderStore
 import java.io.OutputStream
 import java.io.InputStream
 import java.io.IOException
-import java.math.BigDecimal
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
@@ -31,73 +29,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.merge
-
-enum class TrackerTab { DASHBOARD, HISTORY }
-enum class ReadingLoadState { LOADING, READY, ERROR }
-
-enum class LocationLookupError { NOT_FOUND, UNAVAILABLE }
-
-sealed interface LocationLookupState {
-    data object Ready : LocationLookupState
-    data object Resolving : LocationLookupState
-    data class Error(val reason: LocationLookupError) : LocationLookupState
-}
-
-sealed interface MeterLocationDialog {
-    data object Closed : MeterLocationDialog
-    data class Editing(
-        val query: String,
-        val selected: MeterLocation?,
-        val suggestions: List<MeterLocation> = emptyList(),
-        val requestedAfterAdd: Boolean = false,
-        val lookup: LocationLookupState = LocationLookupState.Ready,
-    ) : MeterLocationDialog
-}
-
-sealed interface ExportState {
-    data object Idle : ExportState
-    data class Selecting(val requestId: String, val tracker: TrackerData) : ExportState
-    data class Writing(val requestId: String, val tracker: TrackerData) : ExportState
-    data class Complete(val requestId: String, val succeeded: Boolean) : ExportState
-}
-
-sealed interface CsvImportState {
-    data object Idle : CsvImportState
-    data class Selecting(val requestId: String) : CsvImportState
-    data class Reading(val requestId: String) : CsvImportState
-    data class Preview(val requestId: String, val preview: CsvImportPreview) : CsvImportState
-    data class Applying(val requestId: String, val preview: CsvImportPreview) : CsvImportState
-    data class Complete(val requestId: String, val affectedMeters: Int) : CsvImportState
-    data class Cancelled(val requestId: String) : CsvImportState
-    data class Failed(val requestId: String, val error: CsvImportError, val stalePreview: Boolean = false) : CsvImportState
-}
-
-/** Values rendered by Dashboard, History, and their dialogs; not the database contents alone. */
-data class TrackerState(
-    val readings: List<Reading>,
-    val period: CalendarPeriod,
-    val dashboard: Dashboard,
-    val tab: TrackerTab = TrackerTab.DASHBOARD,
-    val loadState: ReadingLoadState = ReadingLoadState.LOADING,
-    val loadFailure: ReadingFailure? = null,
-    val dialog: ReadingDialog = ReadingDialog.Closed,
-    val locationDialog: MeterLocationDialog = MeterLocationDialog.Closed,
-    val meterLocation: MeterLocation? = null,
-    val temperatures: Map<LocalDate, BigDecimal> = emptyMap(),
-    val intervalTemperatures: Map<LocalDate, BigDecimal> = emptyMap(),
-    val dailyTemperatures: Map<LocalDate, BigDecimal> = emptyMap(),
-    val dailyRates: Map<LocalDate, BigDecimal> = emptyMap(),
-    val sessionId: String = UUID.randomUUID().toString(),
-    val tracker: TrackerData = TrackerData(readings),
-    val export: ExportState = ExportState.Idle,
-    val csvImport: CsvImportState = CsvImportState.Idle,
-    val chartMode: ConsumptionChartMode = ConsumptionChartMode.ABSOLUTE,
-)
 
 /**
  * Holds screen state and coordinates user actions for Dashboard and History.
@@ -123,30 +59,45 @@ class TrackerViewModel(
     private val initialPeriod = CalendarPeriod.containing(PeriodType.WEEK, today())
     var state by mutableStateOf(TrackerState(emptyList(), initialPeriod, dashboard(emptyList(), initialPeriod)))
         private set
-    private var observation: Job? = null
+    private var dashboardObservation: Job? = null
     private var suggestionJob: Job? = null
     private var observationGeneration = 0L
     private var projectionGeneration = 0L
     private var temperatureGeneration = 0L
     private var acceptedRevision = Long.MIN_VALUE
+    private val exportLoads = mutableMapOf<String, Deferred<TrackerData>>()
+    private var latestDashboardTracker: TrackerData? = null
+    private var lastProjectionPeriod: CalendarPeriod? = null
+    private val historyPager = HistoryPagingController(
+        scope = viewModelScope,
+        loadPage = { cursor ->
+            if (repository.usesPeriodScopedDashboardData) {
+                withContext(ioDispatcher) { repository.historyPage(cursor) }
+            } else {
+                historyPageFromTracker(latestDashboardTracker ?: state.tracker, cursor, HISTORY_PAGE_SIZE)
+            }
+        },
+        fallbackInstallations = { state.tracker.installations },
+        onStateChanged = { history -> state = state.copy(history = history) },
+    )
     private var intervalMeans: List<IntervalTemperatureEntity> = emptyList()
     private var dailyMeans: List<DailyTemperatureEntity> = emptyList()
     // Identifies the location revision these cached means belong to, not a reading revision.
     private var intervalMeansGeneration: Long? = null
 
     init {
-        observeReadings()
+        observeDashboardData(state.period)
         observeTemperatures()
         temperature?.let { services ->
             viewModelScope.launch {
                 services.coordinator.location.collect {
                     temperatureGeneration++
                     state = state.copy(meterLocation = it.location)
-                    project(state.tracker, state.period)
+                    if (state.dashboardLoadState == ReadingLoadState.READY) project(state.tracker, state.period)
                     refreshTemperatureSnapshot(services)
                 }
             }
-            services.checks.requestCheck()
+            services.checks.requestCheck(state.period.range)
         }
     }
 
@@ -154,35 +105,54 @@ class TrackerViewModel(
 
     fun selectTab(tab: TrackerTab) {
         state = state.copy(tab = tab)
+        if (tab == TrackerTab.HISTORY) historyPager.ensureLoaded()
     }
+
+    fun loadMoreHistory() = historyPager.loadMore()
+
+    fun retryHistory() = historyPager.retry()
 
     fun selectChartMode(mode: ConsumptionChartMode) {
         state = state.copy(chartMode = mode)
-        project(state.tracker, state.period)
+        if (state.dashboardLoadState == ReadingLoadState.READY) project(state.tracker, state.period)
     }
 
-    fun selectPeriod(type: PeriodType) = project(state.tracker, CalendarPeriod.containing(type, today()))
+    fun selectPeriod(type: PeriodType) = selectDashboardPeriod(CalendarPeriod.containing(type, today()))
 
-    fun navigate(offset: Long) = project(state.tracker, state.period.navigate(offset))
+    fun navigate(offset: Long) = selectDashboardPeriod(state.period.navigate(offset))
 
     fun retryLoad() {
-        if (state.loadState == ReadingLoadState.ERROR) observeReadings()
+        when {
+            state.dialogLoadState == ReadingLoadState.ERROR && state.dialog == ReadingDialog.Closed -> openReplacement()
+            state.dialogLoadState == ReadingLoadState.ERROR -> loadDialogTracker()
+            state.dashboardLoadState == ReadingLoadState.ERROR || state.loadState == ReadingLoadState.ERROR ->
+                observeDashboardData(state.period)
+            state.history.error -> historyPager.retry()
+        }
     }
 
     fun requestExport(): String? {
         if (state.loadState != ReadingLoadState.READY || state.export !is ExportState.Idle) return null
         val requestId = newId()
-        val tracker = state.tracker
-        state = state.copy(export = ExportState.Selecting(requestId, tracker.copy(
-            readings = tracker.readings.toList(),
-            installations = tracker.installations.toList(),
-        )))
+        val tracker = if (repository.usesPeriodScopedDashboardData) TrackerData() else state.tracker.copy(
+            readings = state.tracker.readings.toList(),
+            installations = state.tracker.installations.toList(),
+        )
+        state = state.copy(export = ExportState.Selecting(requestId, tracker))
+        exportLoads[requestId] = if (repository.usesPeriodScopedDashboardData) {
+            viewModelScope.async(ioDispatcher) { repository.completeTracker() }
+        } else {
+            viewModelScope.async { tracker }
+        }
         return requestId
     }
 
     fun cancelExport(requestId: String) {
         val export = state.export as? ExportState.Selecting ?: return
-        if (export.requestId == requestId) state = state.copy(export = ExportState.Idle)
+        if (export.requestId == requestId) {
+            exportLoads.remove(requestId)?.cancel()
+            state = state.copy(export = ExportState.Idle)
+        }
     }
 
     fun beginExportWrite(requestId: String): TrackerData? {
@@ -193,16 +163,29 @@ class TrackerViewModel(
     }
 
     fun writeExport(requestId: String, open: () -> OutputStream?) {
-        val snapshot = beginExportWrite(requestId) ?: return
+        beginExportWrite(requestId) ?: return
         viewModelScope.launch {
-            val succeeded = withContext(ioDispatcher) { writeReadingCsv(snapshot, open) }
-            finishExportWrite(requestId, succeeded)
+            try {
+                val tracker = exportLoads[requestId]?.await() ?: return@launch
+                val export = state.export as? ExportState.Writing ?: return@launch
+                if (export.requestId != requestId) return@launch
+                state = state.copy(export = export.copy(tracker = tracker))
+                val succeeded = withContext(ioDispatcher) { writeReadingCsv(tracker, open) }
+                finishExportWrite(requestId, succeeded)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: ReadingStorageException) {
+                finishExportWrite(requestId, false)
+            }
         }
     }
 
     fun finishExportWrite(requestId: String, succeeded: Boolean) {
         val export = state.export as? ExportState.Writing ?: return
-        if (export.requestId == requestId) state = state.copy(export = ExportState.Complete(requestId, succeeded))
+        if (export.requestId == requestId) {
+            exportLoads.remove(requestId)?.cancel()
+            state = state.copy(export = ExportState.Complete(requestId, succeeded))
+        }
     }
 
     fun acknowledgeExport(requestId: String) {
@@ -283,7 +266,7 @@ class TrackerViewModel(
                         acceptCommittedSnapshot(result.snapshot)
                         finishCsvImport(preview.requestId, CsvImportState.Complete(preview.requestId, preview.preview.changes.size))
                         scheduleReminderAfterSubmission()
-                        temperature?.checks?.requestCheck()
+                        temperature?.checks?.requestCheck(state.period.range)
                     }
                     is CsvImportCommitResult.Rejected -> finishCsvImport(
                         preview.requestId, CsvImportState.Failed(preview.requestId, result.error),
@@ -319,22 +302,122 @@ class TrackerViewModel(
         if (currentId == requestId) state = state.copy(csvImport = result)
     }
 
-    private fun observeReadings() {
-        val generation = ++observationGeneration
-        observation?.cancel()
-        state = state.copy(loadState = ReadingLoadState.LOADING, loadFailure = null)
-        observation = viewModelScope.launch {
-            try {
-                repository.observeReadings().collect { snapshot ->
-                    if (generation != observationGeneration) return@collect
-                    if (!acceptCommittedSnapshot(snapshot)) return@collect
-                    if (generation != observationGeneration) return@collect
-                    state = state.copy(loadState = ReadingLoadState.READY, loadFailure = null)
+    private fun selectDashboardPeriod(period: CalendarPeriod) {
+        if (state.period == period && state.dashboardLoadState == ReadingLoadState.READY) return
+        val wasReady = state.dashboardLoadState == ReadingLoadState.READY
+        state = state.copy(
+            period = period,
+            dashboard = dashboard(emptyList(), period),
+            dailyRates = emptyMap(),
+            temperatures = emptyMap(),
+            intervalTemperatures = emptyMap(),
+            dailyTemperatures = emptyMap(),
+            dashboardLoadState = ReadingLoadState.LOADING,
+        )
+        if (repository.usesPeriodScopedDashboardData) {
+            observeDashboardData(period)
+        } else {
+            latestDashboardTracker?.let { tracker ->
+                if (wasReady) {
+                    project(tracker, period)
+                    state = state.copy(dashboardLoadState = ReadingLoadState.READY)
+                } else {
+                    projectSelectedPeriod(tracker, period)
                 }
+            }
+        }
+        temperature?.checks?.requestCheck(period.range)
+    }
+
+    private fun observeDashboardData(period: CalendarPeriod) {
+        val generation = ++observationGeneration
+        dashboardObservation?.cancel()
+        state = state.copy(
+            loadState = if (state.loadState == ReadingLoadState.ERROR) ReadingLoadState.LOADING else state.loadState,
+            dashboardLoadState = ReadingLoadState.LOADING,
+            loadFailure = null,
+        )
+        dashboardObservation = viewModelScope.launch {
+            try {
+                repository.observeDashboardData(period.range).collect { snapshot ->
+                    if (generation != observationGeneration ||
+                        (repository.usesPeriodScopedDashboardData && period != state.period)
+                    ) return@collect
+                    val tracker = snapshot.tracker
+                    val selectedPeriod = if (repository.usesPeriodScopedDashboardData) period else state.period
+                    val unchanged = sameTracker(tracker, state.tracker)
+                    val revision = snapshot.revision
+                    if (revision != null && revision < acceptedRevision) return@collect
+                    if (unchanged && selectedPeriod == lastProjectionPeriod) {
+                        latestDashboardTracker = tracker
+                        state = state.copy(
+                            loadState = if (state.loadState == ReadingLoadState.LOADING) ReadingLoadState.READY else state.loadState,
+                            dashboardLoadState = ReadingLoadState.READY,
+                            loadFailure = null,
+                        )
+                        if (revision != null) acceptedRevision = maxOf(acceptedRevision, revision)
+                        return@collect
+                    }
+                    if (revision != null) acceptedRevision = revision
+                    latestDashboardTracker = tracker
+                    state = state.copy(readings = tracker.readings, tracker = tracker)
+                    state = state.copy(dashboardLoadState = ReadingLoadState.LOADING)
+                    temperature?.let {
+                        val temperaturePeriod = if (repository.usesPeriodScopedDashboardData) period else state.period
+                        refreshTemperatureSnapshot(it, tracker, temperaturePeriod.range, projectAfterRefresh = false)
+                    }
+                    val projection = ++projectionGeneration
+                    while (generation == observationGeneration && projection == projectionGeneration) {
+                        val selectedPeriod = if (repository.usesPeriodScopedDashboardData) period else state.period
+                        val input = projectionInput(tracker, selectedPeriod)
+                        val prepared = withContext(projectionDispatcher) { prepareDashboardProjection(input) }
+                        if (generation != observationGeneration || projection != projectionGeneration ||
+                            (repository.usesPeriodScopedDashboardData && period != state.period) ||
+                            (!repository.usesPeriodScopedDashboardData && selectedPeriod != state.period)
+                        ) return@collect
+                        if (input.temperatureGeneration != temperatureGeneration || input.chartMode != state.chartMode) {
+                            continue
+                        }
+                        publishProjection(input, prepared)
+                        state = state.copy(
+                            loadState = if (state.loadState == ReadingLoadState.LOADING) ReadingLoadState.READY else state.loadState,
+                            dashboardLoadState = ReadingLoadState.READY,
+                            loadFailure = null,
+                        )
+                        latestDashboardTracker = snapshot.tracker
+                        break
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: ReadingStorageException) {
                 if (generation == observationGeneration) {
-                    state = state.copy(loadState = ReadingLoadState.ERROR, loadFailure = ReadingFailure(error.category, ReadingAction.LOAD))
+                    state = state.copy(
+                        loadState = ReadingLoadState.ERROR,
+                        dashboardLoadState = ReadingLoadState.ERROR,
+                        loadFailure = ReadingFailure(error.category, ReadingAction.LOAD),
+                    )
                 }
+            }
+        }
+    }
+
+    private fun projectSelectedPeriod(tracker: TrackerData, period: CalendarPeriod) {
+        val generation = ++projectionGeneration
+        viewModelScope.launch {
+            while (generation == projectionGeneration && period == state.period) {
+                val input = projectionInput(tracker, period)
+                val projection = withContext(projectionDispatcher) { prepareDashboardProjection(input) }
+                if (generation != projectionGeneration || period != state.period) return@launch
+                if (input.temperatureGeneration != temperatureGeneration || input.chartMode != state.chartMode) continue
+                publishProjection(input, projection)
+                state = state.copy(
+                    loadState = if (state.loadState == ReadingLoadState.LOADING) ReadingLoadState.READY else state.loadState,
+                    dashboardLoadState = ReadingLoadState.READY,
+                    loadFailure = if (state.loadState == ReadingLoadState.LOADING) null else state.loadFailure,
+                )
+                latestDashboardTracker = tracker
+                return@launch
             }
         }
     }
@@ -343,10 +426,7 @@ class TrackerViewModel(
         val services = temperature ?: return
         viewModelScope.launch {
             try {
-                merge(
-                    services.temperatures.observe().map { Unit },
-                    services.temperatures.observeDaily().map { Unit },
-                ).collect {
+                services.temperatures.observeChanges().collect {
                     // Room emissions are invalidation signals; their payload may predate a location clear.
                     refreshTemperatureSnapshot(services)
                 }
@@ -361,15 +441,22 @@ class TrackerViewModel(
     }
 
     /** Reloads cached means without accepting a result captured before a location change. */
-    private suspend fun refreshTemperatureSnapshot(services: TemperatureServices) {
+    private suspend fun refreshTemperatureSnapshot(
+        services: TemperatureServices,
+        tracker: TrackerData = state.tracker,
+        range: DateRange = state.period.range,
+        projectAfterRefresh: Boolean = true,
+    ) {
         try {
-            val snapshot = withContext(ioDispatcher) { services.coordinator.snapshot() }
-            if (snapshot.location != services.coordinator.location.value) return
+            val snapshot = withContext(ioDispatcher) { services.coordinator.snapshot(tracker, range) }
+            if (snapshot.location != services.coordinator.location.value || range != state.period.range) return
             intervalMeans = snapshot.intervalMeans
             dailyMeans = snapshot.dailyMeans
             intervalMeansGeneration = snapshot.location.generation
             temperatureGeneration++
-            project(state.tracker, state.period)
+            if (projectAfterRefresh && state.dashboardLoadState == ReadingLoadState.READY) {
+                project(state.tracker, state.period)
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -381,10 +468,13 @@ class TrackerViewModel(
     fun openAdd() {
         val captured = currentInstant().truncatedTo(ChronoUnit.MINUTES)
         val zone = currentZone()
-        open(ReadingDialog.Editing(newId(), ReadingTarget.Add(captured.atZone(zone).toLocalDate(), captured, zone)))
+        openWithCompleteTracker(
+            ReadingDialog.Editing(newId(), ReadingTarget.Add(captured.atZone(zone).toLocalDate(), captured, zone)),
+        )
     }
 
-    fun openEdit(reading: Reading) = open(ReadingDialog.Editing(newId(), ReadingTarget.Edit(reading)))
+    fun openEdit(reading: Reading) =
+        openWithCompleteTracker(ReadingDialog.Editing(newId(), ReadingTarget.Edit(reading)))
 
     fun openDelete(reading: Reading) = open(ReadingDialog.ConfirmingDeletion(newId(), reading))
 
@@ -442,7 +532,7 @@ class TrackerViewModel(
                 val services = requireNotNull(temperature) { "Temperature services are not configured" }
                 withContext(ioDispatcher) { services.coordinator.save(location) }
                 state = state.copy(meterLocation = location, locationDialog = MeterLocationDialog.Closed)
-                services.checks.requestCheck()
+                services.checks.requestCheck(state.period.range)
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
@@ -476,20 +566,112 @@ class TrackerViewModel(
     }
 
     fun openReplacement() {
-        if (state.loadState != ReadingLoadState.READY || state.dialog.pending) return
-        val date = today()
-        val target = replacementTarget(state.tracker, date) ?: return
-        val phase = replacementTargetError(state.tracker, target, date)?.let { ReplacementPhase.Unavailable(it) }
-            ?: ReplacementPhase.Ready
-        open(ReadingDialog.Replacing(newId(), target, phase))
+        if (state.loadState != ReadingLoadState.READY || state.dialog.pending ||
+            state.dialogLoadState == ReadingLoadState.LOADING
+        ) return
+        val requestId = newId()
+        if (!repository.usesPeriodScopedDashboardData) {
+            val date = today()
+            val target = replacementTarget(state.tracker, date) ?: return
+            val phase = replacementTargetError(state.tracker, target, date)?.let { ReplacementPhase.Unavailable(it) }
+                ?: ReplacementPhase.Ready
+            state = state.copy(
+                dialog = ReadingDialog.Replacing(requestId, target, phase),
+                dialogTracker = null,
+                dialogLoadState = ReadingLoadState.READY,
+            )
+            return
+        }
+        state = state.copy(dialogLoadState = ReadingLoadState.LOADING, loadFailure = null)
+        viewModelScope.launch {
+            try {
+                val tracker = withContext(ioDispatcher) { repository.completeTracker() }
+                if (state.dialogLoadState != ReadingLoadState.LOADING || state.dialog !is ReadingDialog.Closed) return@launch
+                val date = today()
+                val target = replacementTarget(tracker, date)
+                if (target == null) {
+                    state = state.copy(dialogLoadState = ReadingLoadState.READY)
+                    return@launch
+                }
+                val phase = replacementTargetError(tracker, target, date)?.let { ReplacementPhase.Unavailable(it) }
+                    ?: ReplacementPhase.Ready
+                state = state.copy(
+                    dialog = ReadingDialog.Replacing(requestId, target, phase),
+                    dialogTracker = tracker,
+                    dialogLoadState = ReadingLoadState.READY,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: ReadingStorageException) {
+                state = state.copy(
+                    dialogLoadState = ReadingLoadState.ERROR,
+                    loadFailure = ReadingFailure(error.category, ReadingAction.LOAD),
+                )
+            }
+        }
     }
 
     private fun open(dialog: ReadingDialog) {
-        if (state.loadState == ReadingLoadState.READY && !state.dialog.pending) state = state.copy(dialog = dialog)
+        if (state.loadState == ReadingLoadState.READY && !state.dialog.pending) {
+            state = state.copy(dialog = dialog, dialogTracker = null, dialogLoadState = ReadingLoadState.READY)
+        }
+    }
+
+    private fun openWithCompleteTracker(dialog: ReadingDialog.Editing) {
+        if (state.loadState != ReadingLoadState.READY || state.dialog.pending) return
+        if (!repository.usesPeriodScopedDashboardData) {
+            state = state.copy(
+                dialog = dialog,
+                dialogTracker = null,
+                dialogLoadState = ReadingLoadState.READY,
+            )
+            return
+        }
+        state = state.copy(
+            dialog = dialog,
+            dialogTracker = null,
+            dialogLoadState = ReadingLoadState.LOADING,
+            loadFailure = null,
+        )
+        loadDialogTracker()
+    }
+
+    private fun loadDialogTracker() {
+        val dialog = state.dialog
+        val dialogId = dialog.identity() ?: return
+        state = state.copy(dialogTracker = null, dialogLoadState = ReadingLoadState.LOADING, loadFailure = null)
+        viewModelScope.launch {
+            try {
+                val tracker = withContext(ioDispatcher) { repository.completeTracker() }
+                if (state.dialog.identity() != dialogId) return@launch
+                state = state.copy(dialogTracker = tracker, dialogLoadState = ReadingLoadState.READY)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: ReadingStorageException) {
+                if (state.dialog.identity() == dialogId) {
+                    state = state.copy(
+                        dialogLoadState = ReadingLoadState.ERROR,
+                        loadFailure = ReadingFailure(error.category, ReadingAction.LOAD),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun ReadingDialog.identity(): String? = when (this) {
+        ReadingDialog.Closed -> null
+        is ReadingDialog.Editing -> dialogId
+        is ReadingDialog.ConfirmingDeletion -> dialogId
+        is ReadingDialog.Replacing -> dialogId
+        is ReadingDialog.ConfirmingPurge -> dialogId
     }
 
     fun dismissDialog() {
-        if (!state.dialog.pending) state = state.copy(dialog = ReadingDialog.Closed)
+        if (!state.dialog.pending) state = state.copy(
+            dialog = ReadingDialog.Closed,
+            dialogTracker = null,
+            dialogLoadState = ReadingLoadState.READY,
+        )
     }
 
     fun clearDialogError() {
@@ -505,7 +687,9 @@ class TrackerViewModel(
 
     fun replaceMeter(input: String, locale: Locale) {
         val dialog = state.dialog as? ReadingDialog.Replacing ?: return
-        if (state.loadState != ReadingLoadState.READY || dialog.pending || dialog.phase is ReplacementPhase.Unavailable) return
+        if (state.loadState != ReadingLoadState.READY || state.dialogLoadState != ReadingLoadState.READY ||
+            dialog.pending || dialog.phase is ReplacementPhase.Unavailable
+        ) return
         val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
         val observedAt = currentInstant().truncatedTo(ChronoUnit.MINUTES)
         val zone = currentZone()
@@ -522,7 +706,7 @@ class TrackerViewModel(
                         acceptCommittedSnapshot(result.snapshot)
                         finishReplacement(request, null)
                         scheduleReminderAfterSubmission()
-                        temperature?.checks?.requestCheck()
+                        temperature?.checks?.requestCheck(state.period.range)
                     }
                 }
             } catch (error: ReadingStorageException) {
@@ -533,7 +717,7 @@ class TrackerViewModel(
 
     fun save(date: LocalDate?, input: String, locale: Locale, note: String? = null, time: String, zone: ZoneId) {
         val dialog = state.dialog as? ReadingDialog.Editing ?: return
-        if (state.loadState != ReadingLoadState.READY || dialog.pending) return
+        if (state.loadState != ReadingLoadState.READY || state.dialogLoadState != ReadingLoadState.READY || dialog.pending) return
         val request = ReadingRequest(state.sessionId, dialog.dialogId, newId())
         val meter = parseMeter(input, locale)
         val intent = when (val target = dialog.target) {
@@ -550,7 +734,7 @@ class TrackerViewModel(
                         acceptCommittedSnapshot(result.snapshot)
                         finishSave(request, null)
                         scheduleReminderAfterSubmission()
-                        temperature?.checks?.requestCheck()
+                        temperature?.checks?.requestCheck(state.period.range)
                         if (dialog.target is ReadingTarget.Add) requestLocationAfterAdd()
                     }
                 }
@@ -572,7 +756,7 @@ class TrackerViewModel(
                     is DeleteReadingResult.Deleted -> {
                         acceptCommittedSnapshot(result.snapshot)
                         finishDelete(request, null)
-                        temperature?.checks?.requestCheck()
+                        temperature?.checks?.requestCheck(state.period.range)
                     }
                 }
             } catch (error: ReadingStorageException) {
@@ -598,7 +782,12 @@ class TrackerViewModel(
     }
 
     private fun finishPurge(request: ReadingRequest, phase: PurgePhase?) {
-        state = state.copy(dialog = state.dialog.completePurge(request, state.sessionId, phase))
+        val dialog = state.dialog.completePurge(request, state.sessionId, phase)
+        state = state.copy(
+            dialog = dialog,
+            dialogTracker = if (dialog == ReadingDialog.Closed) null else state.dialogTracker,
+            dialogLoadState = if (dialog == ReadingDialog.Closed) ReadingLoadState.READY else state.dialogLoadState,
+        )
     }
 
     private fun scheduleReminderAfterSubmission() {
@@ -612,7 +801,12 @@ class TrackerViewModel(
     }
 
     private fun finishSave(request: ReadingRequest, phase: SavePhase?) {
-        state = state.copy(dialog = state.dialog.completeSave(request, state.sessionId, phase))
+        val dialog = state.dialog.completeSave(request, state.sessionId, phase)
+        state = state.copy(
+            dialog = dialog,
+            dialogTracker = if (dialog == ReadingDialog.Closed) null else state.dialogTracker,
+            dialogLoadState = if (dialog == ReadingDialog.Closed) ReadingLoadState.READY else state.dialogLoadState,
+        )
     }
 
     private fun finishDelete(request: ReadingRequest, phase: DeletePhase?) {
@@ -620,7 +814,12 @@ class TrackerViewModel(
     }
 
     private fun finishReplacement(request: ReadingRequest, phase: ReplacementPhase?) {
-        state = state.copy(dialog = state.dialog.completeReplacement(request, state.sessionId, phase))
+        val dialog = state.dialog.completeReplacement(request, state.sessionId, phase)
+        state = state.copy(
+            dialog = dialog,
+            dialogTracker = if (dialog == ReadingDialog.Closed) null else state.dialogTracker,
+            dialogLoadState = if (dialog == ReadingDialog.Closed) ReadingLoadState.READY else state.dialogLoadState,
+        )
     }
 
     private fun newId() = UUID.randomUUID().toString()
@@ -640,35 +839,43 @@ class TrackerViewModel(
 
     private suspend fun acceptCommittedSnapshot(snapshot: CommittedSnapshot): Boolean {
         if (snapshot.revision < acceptedRevision) return false
-        // All three collections matter; reading equality includes exact decimal scale.
-        val sameTracker = snapshot.tracker.readings.size == state.tracker.readings.size &&
-            snapshot.tracker.installations.size == state.tracker.installations.size &&
-            snapshot.readings.associateBy { it.id } == state.tracker.readings.associateBy { it.id } &&
-            snapshot.tracker.installations.associateBy { it.id } == state.tracker.installations.associateBy { it.id }
-        if (snapshot.revision == acceptedRevision) return sameTracker
+        if (snapshot.revision == acceptedRevision) return true
         acceptedRevision = snapshot.revision
-        if (sameTracker) return true
-        if (state.loadState != ReadingLoadState.LOADING) {
-            project(snapshot.tracker, state.period)
-            return true
+        val tracker = if (repository.usesPeriodScopedDashboardData) {
+            dashboardDataForPeriod(snapshot.tracker, state.period.range)
+        } else {
+            snapshot.tracker
         }
 
-        val revision = snapshot.revision
-        val observation = observationGeneration
-        val generation = ++projectionGeneration
-        while (true) {
-            val input = projectionInput(snapshot.tracker, state.period)
-            val projection = withContext(projectionDispatcher) { prepareProjection(input) }
-            if (generation != projectionGeneration || revision != acceptedRevision ||
-                observation != observationGeneration
-            ) return false
-            if (input.temperatureGeneration != temperatureGeneration ||
-                input.period != state.period || input.chartMode != state.chartMode
-            ) continue
-            publishProjection(input, projection)
+        latestDashboardTracker = tracker
+        if (sameTracker(tracker, state.tracker) && state.period == lastProjectionPeriod) {
+            historyPager.refreshAfterMutation(state.tab == TrackerTab.HISTORY)
             return true
         }
+        val period = state.period
+        val generation = ++projectionGeneration
+        while (generation == projectionGeneration && period == state.period) {
+            val input = projectionInput(tracker, period)
+            val projection = withContext(projectionDispatcher) { prepareDashboardProjection(input) }
+            if (generation != projectionGeneration || period != state.period) return false
+            if (input.temperatureGeneration != temperatureGeneration || input.chartMode != state.chartMode) continue
+            publishProjection(input, projection, preserveEqualDashboard = true)
+            state = state.copy(
+                loadState = if (state.loadState == ReadingLoadState.LOADING) ReadingLoadState.READY else state.loadState,
+                dashboardLoadState = ReadingLoadState.READY,
+                loadFailure = if (state.loadState == ReadingLoadState.LOADING) null else state.loadFailure,
+            )
+            historyPager.refreshAfterMutation(state.tab == TrackerTab.HISTORY)
+            return true
+        }
+        return false
     }
+
+    private fun sameTracker(first: TrackerData, second: TrackerData): Boolean =
+        first.readings.size == second.readings.size &&
+            first.installations.size == second.installations.size &&
+            first.readings.associateBy { it.id } == second.readings.associateBy { it.id } &&
+            first.installations.associateBy { it.id } == second.installations.associateBy { it.id }
 
     /**
      * Rebuilds History ordering, gas buckets, and date-keyed temperatures from the same tracker.
@@ -677,34 +884,15 @@ class TrackerViewModel(
     private fun project(tracker: TrackerData, period: CalendarPeriod) {
         if (state.loadState != ReadingLoadState.LOADING) projectionGeneration++
         val input = projectionInput(tracker, period)
-        publishProjection(input, prepareProjection(input))
+        publishProjection(input, prepareDashboardProjection(input))
     }
 
-    private data class ProjectionInput(
-        val tracker: TrackerData,
-        val period: CalendarPeriod,
-        val chartMode: ConsumptionChartMode,
-        val intervalMeans: List<IntervalTemperatureEntity>,
-        val dailyMeans: List<DailyTemperatureEntity>,
-        val location: MeterLocation?,
-        val temperatureGeneration: Long,
-    )
-
-    private data class PreparedProjection(
-        val readings: List<Reading>,
-        val dashboard: Dashboard,
-        val dailyRates: Map<LocalDate, BigDecimal>,
-        val temperatures: Map<LocalDate, BigDecimal>,
-        val intervalTemperatures: Map<LocalDate, BigDecimal>,
-        val dailyTemperatures: Map<LocalDate, BigDecimal>,
-    )
-
-    private fun projectionInput(tracker: TrackerData, period: CalendarPeriod): ProjectionInput {
+    private fun projectionInput(tracker: TrackerData, period: CalendarPeriod): DashboardProjectionInput {
         val weatherLocation = temperature?.coordinator?.location?.value
         val location = weatherLocation
             ?.takeIf { it.cacheReady && it.generation == intervalMeansGeneration }
             ?.location
-        return ProjectionInput(
+        return DashboardProjectionInput(
             tracker = tracker,
             period = period,
             chartMode = state.chartMode,
@@ -715,39 +903,21 @@ class TrackerViewModel(
         )
     }
 
-    private fun prepareProjection(input: ProjectionInput): PreparedProjection {
-        val tracker = input.tracker
-        val period = input.period
-        val intervals = readingIntervals(tracker)
-        val installations = tracker.installations.sortedWith(compareBy<MeterInstallation> { it.startDate != null }.thenBy { it.startDate })
-            .mapIndexed { index, installation -> installation.id to index }.toMap()
-        val readings = tracker.readings.sortedWith(compareByDescending<Reading> { it.date }.thenByDescending { installations.getValue(it.installationId) })
-        val intervalTemperatures = TemperatureAggregation.temperaturesByConsumptionDate(
-            readings, input.intervalMeans, input.location,
-        )
-        val dailyTemperatures = TemperatureAggregation.dailyTemperaturesByConsumptionDate(
-            readings, input.dailyMeans, input.location,
-        )
-        val selectedTemperatures = when (input.chartMode) {
-            ConsumptionChartMode.ABSOLUTE -> intervalTemperatures
-            ConsumptionChartMode.DAILY_ESTIMATE -> dailyTemperatures
-        }
-        return PreparedProjection(
-            readings = readings,
-            dashboard = dashboardFromIntervals(intervals, period),
-            dailyRates = dailyConsumptionRates(intervals, period),
-            temperatures = selectedTemperatures,
-            intervalTemperatures = intervalTemperatures,
-            dailyTemperatures = dailyTemperatures,
-        )
-    }
-
-    private fun publishProjection(input: ProjectionInput, projection: PreparedProjection) {
+    private fun publishProjection(
+        input: DashboardProjectionInput,
+        projection: DashboardProjection,
+        preserveEqualDashboard: Boolean = false,
+    ) {
+        lastProjectionPeriod = input.period
         state = state.copy(
             readings = projection.readings,
             tracker = input.tracker,
             period = input.period,
-            dashboard = projection.dashboard,
+            dashboard = if (preserveEqualDashboard && projection.dashboard == state.dashboard) {
+                state.dashboard
+            } else {
+                projection.dashboard
+            },
             dailyRates = projection.dailyRates,
             temperatures = projection.temperatures,
             intervalTemperatures = projection.intervalTemperatures,
